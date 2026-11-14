@@ -89,7 +89,15 @@ ENV
   echo "   Created $ENVF"
 else
   echo "   Keeping existing settings in $ENVF"
-  HOST=$(grep -oP '^BACKEND_URL=https://\K\S+' "$ENVF")
+  OLD_HOST=$(grep -oP '^BACKEND_URL=https://\K\S+' "$ENVF" || true)
+  if [ -n "$OLD_HOST" ] && [ "$OLD_HOST" != "$HOST" ] && [[ "$OLD_HOST" == *.sslip.io ]]; then
+    # the server has a new IP (e.g. a new Elastic IP): move the web address to it
+    sed -i "s#https://$OLD_HOST#https://$HOST#g" "$ENVF"
+    echo "   The IP changed: web address moved from $OLD_HOST to $HOST"
+    echo "   Put the NEW Redirect URL and IP in Zerodha (shown below)."
+  elif [ -n "$OLD_HOST" ]; then
+    HOST=$OLD_HOST
+  fi
 fi
 chmod 600 "$ENVF"
 chown -R mjvs:mjvs "$APP"
