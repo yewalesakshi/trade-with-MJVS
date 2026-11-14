@@ -37,6 +37,9 @@ THE 8 ALGOS
     Drawdown limit counts closed-trade losses; emergency close if a gap passes 10%.
     WARNING: needs at least Rs 2,00,000 capital and a risk (drawdown limit) of at most 5%.
     A trade is executed only with its 5% stop loss; with less money or more risk it opens nothing new.
+    CHART: the NIFTY Future swing page shows the 1-hour chart of the NIFTY future with the 50 SMA,
+    Bollinger band, RSI(8) and %b, the BUY / SELL signals and your trades (press "Refresh chart").
+    Chart drawing: TradingView Lightweight Charts (web/lightweight-charts.js, Apache 2.0 licence).
   Target and stop loss are checked every 15 min (futures every 5 min) in market hours.
   All times in the database and on the site are Indian time (IST).
 

@@ -288,3 +288,11 @@ code,.code{font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;backgr
 .opad-b{padding:16px 16px 4px}
 .opad-f{display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--line);background:var(--surface-2)}
 .opad-go{background:#4184f3;min-width:130px}.opad-go:hover{background:#2f6fe0}
+
+/* NIFTY Future swing chart */
+.fc-box{width:100%;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.fc-now{display:flex;flex-wrap:wrap;gap:8px 22px;margin:4px 0 12px}
+.fc-now>div{display:flex;flex-direction:column;gap:2px}
+.fc-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px}
+.fc-legend i{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+@media (max-width:640px){#fc-main{height:320px!important}}

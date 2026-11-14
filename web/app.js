@@ -512,6 +512,90 @@ function appAlgos() {
   };
 }
 
+// ---------------- NIFTY Future swing chart (TradingView Lightweight Charts, saved in web/)
+function futChartCard() {
+  return '<div class="card"><div class="card-head"><div><h3>Chart · NIFTY future, 1-hour candles</h3><p class="muted small" id="fc-sub">Candles with the 50 SMA and Bollinger band (50, SD 1). ' +
+    '<b style="color:var(--good)">▲ BUY</b> = all three buy conditions first true (opens a long, or covers a short and buys). <b style="color:var(--bad)">▼ SELL</b> = while long, an exit condition turned true (long closed, short opened). ' +
+    'Circles = your trades (B = bought, S = sold, with quantity; they also include the 8% target and 5% stop-loss exits). Completed candles only, like the algo.</p></div><button class="btn ghost sm" type="button" id="fc-go">Refresh chart</button></div>' +
+    '<div class="fc-now" id="fc-now"></div>' +
+    '<div id="fc-main" class="fc-box" style="height:420px"></div>' +
+    '<div class="lbl" style="margin:10px 0 4px">RSI(8) and %b(50, SD 1)</div><div id="fc-ind" class="fc-box" style="height:160px"></div>' +
+    '<div class="fc-legend small muted"><span><i style="background:#f59e0b"></i>SMA 50</span><span><i style="background:#8b8bd8"></i>Bollinger band</span><span><i style="background:#2f80ed"></i>RSI(8)</span><span><i style="background:#c2410c"></i>%b</span><span>Dotted: RSI 60 / 40, %b 51 / 50</span></div>' +
+    '<p id="fc-msg" class="msg small" role="status"></p><div id="fc-sig"></div></div>';
+}
+var LWC_PROMISE = null;
+function loadLWC() {
+  if (window.LightweightCharts) return Promise.resolve();
+  if (!LWC_PROMISE) LWC_PROMISE = new Promise(function (ok, bad) {
+    var sc = document.createElement("script"); sc.src = "/static/lightweight-charts.js"; sc.onload = ok;
+    sc.onerror = function () { LWC_PROMISE = null; bad(); }; document.head.appendChild(sc);
+  });
+  return LWC_PROMISE;
+}
+var FC = { charts: [] };
+function futChartLoad() {
+  var m = $("fc-msg"), b = $("fc-go"); if (!m) return;
+  if (b && !b.dataset.on) { b.dataset.on = 1; b.addEventListener("click", futChartLoad); }
+  say(m, true, "Loading the chart from Kite…"); if (b) b.disabled = true;
+  Promise.all([loadLWC(), api("/algos/futures/chart")]).then(function (r) {
+    if (b) b.disabled = false;
+    var x = r[1];
+    if (!x.ok) { say(m, false, errText(x, "Could not load the chart")); return; }
+    say(m, true, ""); futChartDraw(x.d);
+  }).catch(function () { if (b) b.disabled = false; say(m, false, "Could not load the chart. Check the connection and press Refresh chart."); });
+}
+function futChartDraw(d) {
+  FC.charts.forEach(function (c) { c.remove(); }); FC.charts = [];
+  var cs = getComputedStyle(document.documentElement), v = function (n) { return cs.getPropertyValue(n).trim(); };
+  var L = window.LightweightCharts, ink = v("--muted"), line = v("--line"), good = v("--good"), bad = v("--bad");
+  var base = { layout: { background: { type: "solid", color: "transparent" }, textColor: ink, fontFamily: "Instrument Sans, system-ui, sans-serif" },
+    grid: { vertLines: { color: line }, horzLines: { color: line } }, rightPriceScale: { borderColor: line },
+    timeScale: { borderColor: line, timeVisible: true, secondsVisible: false }, crosshair: { mode: 0 },
+    localization: { locale: "en-IN", priceFormatter: function (p) { return p.toLocaleString("en-IN", { maximumFractionDigits: 2 }); } } };
+  var main = L.createChart($("fc-main"), Object.assign({ autoSize: true }, base));
+  var ind = L.createChart($("fc-ind"), Object.assign({ autoSize: true }, base));
+  FC.charts = [main, ind];
+  var cnd = main.addCandlestickSeries({ upColor: good, downColor: bad, borderUpColor: good, borderDownColor: bad, wickUpColor: good, wickDownColor: bad });
+  cnd.setData(d.candles);
+  var opt = function (c, w, style) { return { color: c, lineWidth: w || 2, lineStyle: style || 0, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }; };
+  main.addLineSeries(opt("#8b8bd8", 1)).setData(d.bbu);
+  main.addLineSeries(opt("#8b8bd8", 1)).setData(d.bbl);
+  main.addLineSeries(opt("#f59e0b", 2)).setData(d.ma);
+  var marks = d.signals.map(function (s) {
+    return s.type === "BUY" ? { time: s.time, position: "belowBar", color: good, shape: "arrowUp", text: "BUY" }
+                            : { time: s.time, position: "aboveBar", color: bad, shape: "arrowDown", text: "SELL" };
+  }).concat(d.trades.map(function (t) {
+    return { time: t.time, position: t.side === "BUY" ? "belowBar" : "aboveBar", color: t.side === "BUY" ? good : bad, shape: "circle",
+             text: (t.side === "BUY" ? "B " : "S ") + t.qty };
+  })).sort(function (p, q) { return p.time - q.time; });
+  cnd.setMarkers(marks);
+  var rsi = ind.addLineSeries(opt("#2f80ed", 2)), pb = ind.addLineSeries(opt("#c2410c", 2));
+  rsi.setData(d.rsi); pb.setData(d.pctb);
+  [[d.levels.rsi_buy, "#2f80ed"], [d.levels.rsi_exit, "#2f80ed"]].forEach(function (l) { rsi.createPriceLine({ price: l[0], color: l[1], lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "" }); });
+  [[d.levels.pctb_buy, "#c2410c"], [d.levels.pctb_exit, "#c2410c"]].forEach(function (l) { pb.createPriceLine({ price: l[0], color: l[1], lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: "" }); });
+  // keep both charts on the same time window
+  var busy = false;
+  [[main, ind], [ind, main]].forEach(function (p) {
+    p[0].timeScale().subscribeVisibleLogicalRangeChange(function (r) { if (busy || !r) return; busy = true; p[1].timeScale().setVisibleLogicalRange(r); busy = false; });
+  });
+  var n = d.candles.length; main.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 120), to: n + 3 });
+  var l = d.last, state = l.buy_ok ? '<span class="sig BUY">All BUY conditions true</span>' : l.exit_ok ? '<span class="sig SELL">Exit condition true</span>' : '<span class="sig HOLD">Mixed</span>';
+  $("fc-now").innerHTML = '<div><span class="muted small">Contract</span><b>' + esc(d.symbol) + "</b></div>" +
+    '<div><span class="muted small">Price now</span><b class="num">' + (d.ltp == null ? "—" : px.format(d.ltp)) + "</b></div>" +
+    '<div><span class="muted small">Last 1h close</span><b class="num">' + px.format(l.close) + "</b></div>" +
+    '<div><span class="muted small">SMA 50</span><b class="num">' + (l.ma == null ? "—" : px.format(l.ma)) + "</b></div>" +
+    '<div><span class="muted small">RSI(8)</span><b class="num">' + (l.rsi == null ? "—" : l.rsi.toFixed(1)) + "</b></div>" +
+    '<div><span class="muted small">%b</span><b class="num">' + (l.pctb == null ? "—" : l.pctb.toFixed(1)) + "</b></div>" +
+    '<div><span class="muted small">Now</span>' + state + "</div>";
+  var recent = d.signals.slice(-8).reverse();
+  $("fc-sig").innerHTML = '<div class="lbl" style="margin-top:12px">Latest signals on this chart</div>' + table(["Candle (IST)", "Signal", "Close"], recent.map(function (s) {
+    return "<tr><td>" + chartTime(s.time) + '</td><td><span class="sig ' + s.type + '">' + s.type + "</span></td><td>" + px.format(s.price) + "</td></tr>";
+  }), "No BUY or SELL signal in the last " + n + " one-hour candles.");
+}
+function chartTime(t) { // chart times are IST clock times stored as UTC
+  return new Date(t * 1000).toLocaleString("en-IN", { timeZone: "UTC", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 function appAlgo(id) {
   var a = ALG[id]; if (!a) { go("/app/algos"); return; }
   var s0 = subOf(id), pf = null;
@@ -545,7 +629,8 @@ function appAlgo(id) {
     '<div class="stack"><div id="kb"></div><div class="grid g2">' + settings + status + "</div>" +
     (a.require_tradingview || a.suggest ? '<div class="card"><div class="card-head"><div><h3>Suggestions' + (a.require_tradingview ? ": scanner + TradingView" : "") + '</h3><p class="muted small">' +
       (a.require_tradingview ? "Stocks that passed both checks" + (a.match_minutes ? " within " + a.match_minutes + " minutes" : " on the same day") + "." : "Fresh BUY signals from this algo’s scanner. The scanner runs by itself every trading morning.") +
-      (a.auto_trade ? " Running members buy them at the next check." : " This algo only suggests; it places no orders.") + '</p></div></div><div id="sg"></div></div>' : "") + sig +
+      (a.auto_trade ? " Running members buy them at the next check." : " This algo only suggests; it places no orders.") + '</p></div></div><div id="sg"></div></div>' : "") +
+    (id === "futures" ? futChartCard() : "") + sig +
     '<div class="card"><div class="card-head"><h3>Open positions</h3></div><div id="ps"></div></div>' +
     '<div class="card"><div class="card-head"><h3>Trades</h3></div><div id="ts"></div></div></div>');
 
@@ -626,12 +711,13 @@ function appAlgo(id) {
       if ($("sg")) $("sg").innerHTML = table(["Date", "Stock", "Price at match", "LTP now", "Scanner", "TradingView", ""], sugRows(x.d.suggestions, false), "No matches yet."); });
   }
   loadSignals(uni);
+  if (id === "futures") futChartLoad();
 
   PAGE.paint = function () {
     $("kb").innerHTML = DASH.kite.fresh ? "" : kiteBanner(); on("kc2", "click", connectKite);
     var s = subOf(id), run = !!(s && s.running);
     $("runbadge").innerHTML = s ? (run ? '<span class="badge good"><span class="dot"></span>Running · ' + (s.paper ? "paper" : "LIVE") + "</span>" : '<span class="badge">Stopped</span>') : "";
-    ["s-amt", "s-dd", "s-uni", "s-max"].forEach(function (f) { if ($(f)) $(f).disabled = run || !a.ready || !a.auto_trade; });
+    ["s-amt", "s-dd", "s-uni", "s-max"].forEach(function (f) { if ($(f)) $(f).disabled = run || !a.ready || !a.auto_trade || (f === "s-dd" && (a.max_drawdown || 15) <= 5); });
     $("s-mode").querySelectorAll("button").forEach(function (b) { b.disabled = run || !a.ready; });
     if (run) setMode(s.paper ? "paper" : "live");
     var g = $("s-go"); g.textContent = !a.auto_trade && a.ready ? "Suggestions only" : run ? "Stop algo" : (paper ? "Start in paper mode" : "Start with LIVE orders"); g.className = "btn block" + (run ? " danger" : "");

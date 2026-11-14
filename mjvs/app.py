@@ -4,6 +4,8 @@ import os
 import time
 import datetime as dt
 
+import pandas as pd
+
 from argon2.exceptions import VerifyMismatchError
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -461,6 +463,81 @@ def algo_signals(algo_id: str, universe: str = "", mid: int = Depends(current_me
                             "note": a.note, "at": iso(a.at)} for a in alerts],
                 "suggestions": [suggestion_view(x) for x in s.query(Suggestion).filter_by(algo_id=algo_id)
                                 .order_by(Suggestion.id.desc()).limit(50)]}
+
+
+@app.get("/algos/futures/chart")
+def futures_chart(mid: int = Depends(current_member_id)):
+    """1-hour chart of the NIFTY future with the strategy's lines, BUY / SELL signals and this
+    member's NIFTY Future swing trades. Uses completed candles only, like the algo itself."""
+    from .algos import rules
+    algo = get_algo("futures")
+    now = config.ist_now()
+    with Session(engine) as s:
+        m, k = member_kite(s, mid)
+
+        def load():
+            con = algo.contract(k, now.date())
+            if not con:
+                raise HTTPException(400, "NIFTY future contract not found in Kite's instrument list.")
+            full = f"NFO:{con['symbol']}"
+            quote = k.ltp([full]).get(full) or {}
+            token = quote.get("instrument_token") or con.get("token")
+            df = broker.history(k, token, algo.interval, CHART_CANDLES + rules.WARMUP, now)
+            return con, quote.get("last_price"), df
+        con, ltp, df = kite_call(s, m, load)
+        trades = (s.query(Trade).filter(Trade.member_id == mid, Trade.algo_id == "futures",
+                                        Trade.status != "REJECTED").order_by(Trade.at).all())
+    if df is None or df.empty:
+        raise HTTPException(400, "Kite sent no 1-hour candles for the NIFTY future yet.")
+    df = rules.add_indicators(df)
+    c = df["close"].astype(float)
+    basis = c.rolling(rules.BB_LENGTH).mean()
+    dev = rules.BB_SD * c.rolling(rules.BB_LENGTH).std(ddof=0)
+    df["bbu"], df["bbl"] = basis + dev, basis - dev
+    stamps = pd.Series(pd.to_datetime(df.index), index=df.index)
+    if stamps.dt.tz is not None:
+        stamps = stamps.dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+    # Chart times are Indian time written as if UTC, so the chart shows IST clock times.
+    df["t"] = ((stamps - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1)).astype("int64")
+    df = df.tail(CHART_CANDLES)
+    start = int(df["t"].iloc[0])
+
+    def num(v):
+        return None if pd.isna(v) else round(float(v), 2)
+
+    def line(col):
+        return [{"time": int(t), "value": num(v)} for t, v in zip(df["t"], df[col]) if not pd.isna(v)]
+
+    # Signals in the algo's order: BUY opens a long; while long, the first exit condition is SELL
+    # (long closed, short opened); while short, the next BUY covers and buys again.
+    signals, side = [], None
+    for r in df.itertuples():
+        if r.buy_signal and side != "long":
+            signals.append({"time": int(r.t), "type": "BUY", "price": num(r.close)}); side = "long"
+        elif r.exit_ok and side == "long":
+            signals.append({"time": int(r.t), "type": "SELL", "price": num(r.close)}); side = "short"
+    tr = []
+    for t in trades:
+        ts = int((pd.Timestamp(t.at.replace(tzinfo=None)) - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1))
+        if ts >= start:
+            # put the marker on the 1-hour candle the trade happened in
+            bar = int(df["t"][df["t"] <= ts].max()) if (df["t"] <= ts).any() else start
+            tr.append({"time": bar, "side": t.side, "qty": t.qty, "price": t.price, "mode": t.mode,
+                       "reason": t.reason, "at": iso(t.at)})
+    last = df.iloc[-1]
+    return {"symbol": con["symbol"], "expiry": con.get("expiry"), "ltp": ltp, "interval": "1 hour",
+            "candles": [{"time": int(r.t), "open": num(r.open), "high": num(r.high), "low": num(r.low),
+                         "close": num(r.close)} for r in df.itertuples()],
+            "ma": line("ma"), "bbu": line("bbu"), "bbl": line("bbl"), "rsi": line("rsi"), "pctb": line("pctb"),
+            "signals": signals, "trades": tr,
+            "last": {"time": iso(stamps.iloc[-1].to_pydatetime()), "close": num(last["close"]), "ma": num(last["ma"]),
+                     "rsi": num(last["rsi"]), "pctb": num(last["pctb"]), "trend": str(last["trend"]),
+                     "buy_ok": bool(last["buy_ok"]), "exit_ok": bool(last["exit_ok"])},
+            "levels": {"rsi_buy": rules.RSI_BUY, "rsi_exit": rules.RSI_EXIT,
+                       "pctb_buy": rules.PCTB_BUY, "pctb_exit": rules.PCTB_EXIT}}
+
+
+CHART_CANDLES = 300          # about 2 months of 1-hour candles
 
 
 def suggestion_view(x: Suggestion, ltp=None) -> dict:
