@@ -1,0 +1,10 @@
+# Your data stays on your PC / server, never on GitHub
+mjvs.db
+my_secrets.bat
+*.db
+backups/
+# Build and cache files
+__pycache__/
+*.pyc
+*.zip
+watchlists/*.bak

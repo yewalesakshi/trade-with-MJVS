@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+sqlalchemy
+kiteconnect
+cryptography
+apscheduler
+pandas
+numpy
+argon2-cffi
+pyjwt
+httpx
+python-multipart
+pillow
+psycopg[binary]

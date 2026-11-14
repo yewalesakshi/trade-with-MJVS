@@ -1,0 +1,86 @@
+MJVS ON AWS LIGHTSAIL (MUMBAI) — FREE FOR 3 MONTHS, WITH A FIXED IP
+=====================================================================
+Result: your app runs 24x7 on the internet with ONE IP that never changes, so Zerodha's
+IP whitelist works every day. Your PC can be switched off.
+
+Cost: the server plan marked "First 3 months free" + a Static IP (free while attached) = Rs 0.
+AWS needs a debit/credit card (Visa/Mastercard). Read "AVOID CHARGES" at the end.
+
+
+PART A — Create the server (about 15 minutes)
+--------------------------------------------
+1. Go to https://lightsail.aws.amazon.com and create an AWS account (card needed; a ~Rs 2
+   verification amount may be taken and refunded).
+2. Click "Create instance".
+   - Region: Mumbai (ap-south-1)
+   - Platform: Linux/Unix  ->  Blueprint: "OS Only" -> Ubuntu 24.04 LTS (or 22.04)
+   - Plan: choose one that says "First 3 months free". Pick the 1 GB or 2 GB plan if it has
+     that label (scanning ~2,000 stocks needs at least 1 GB).
+   - Name: mjvs  ->  Create instance.
+3. Open the instance -> "Networking" tab:
+   - "Attach static IP" -> create one -> attach it to "mjvs". Write the IP down.
+   - IPv4 Firewall -> "Add rule" -> HTTPS (443). (SSH 22 and HTTP 80 are already there.)
+
+
+PART B+C — Install from GitHub (one command, about 5-10 minutes)
+-----------------------------------------------------------------
+4. In Lightsail click the orange "Connect using SSH" button (a terminal opens in the browser)
+   and paste:
+
+   sudo apt-get update && sudo apt-get install -y git unzip
+   git clone https://github.com/yewalesakshi/Trade-with-MJVS.git && cd Trade-with-MJVS && sudo bash deploy/setup_server.sh
+
+   Works on Ubuntu 24.04 and 22.04 (AWS EC2 or Lightsail). Ports 80 and 443 must be open
+   (EC2: Security group -> Inbound rules; Lightsail: Networking tab), or HTTPS cannot start.
+5. At the end it prints:
+     Your website:      https://1-2-3-4.sslip.io
+     Fixed IP to whitelist in Zerodha:  1.2.3.4
+     Kite Redirect URL:  https://1-2-3-4.sslip.io/kite/callback
+   (sslip.io is a free web address that always points to your IP; HTTPS is set up for you.)
+
+Optional — bring your PC data (members, trades): copy mjvs.db to /home/ubuntu before step 4:
+   scp -i "C:\Users\YOURNAME\Downloads\LightsailDefaultKey-ap-south-1.pem" "C:\path\to\mjvs.db" ubuntu@1.2.3.4:/home/ubuntu/
+   The server makes its own new secret keys, so re-enter the Kite API key + secret in Admin.
+
+Without GitHub: upload MJVS_project.zip to /home/ubuntu (scp as above) and run
+   sudo apt-get update && sudo apt-get install -y unzip
+   cd /home/ubuntu && unzip -o MJVS_project.zip && sudo bash mjvs_app/deploy/setup_server.sh
+
+
+PART D — Zerodha (5 minutes)
+----------------------------
+6. developers.kite.trade -> your MJVS app -> Redirect URL = the "Kite Redirect URL" above.
+   (A Kite app has one redirect URL: after this, Connect works on the server, not on the PC.)
+7. developers.kite.trade -> Profile -> IP Whitelist -> put the fixed IP on the first line
+   (remove the old home IPs). Save. Wait a few minutes.
+8. Open your website, log in (or register: the FIRST account is the admin).
+    - If you did NOT copy mjvs.db: Admin -> Kite setup -> paste API key + secret -> Save.
+    - Connect Kite -> Admin -> "Check market data" -> Admin -> switch Live trading on/off.
+    - Manual trading -> Live -> buy 1 share to test.
+
+Daily: open the website and press Connect Kite once each trading day (Zerodha's rule).
+
+
+UPDATING THE APP LATER
+----------------------
+After new code is on GitHub, in the browser terminal:
+   cd ~/Trade-with-MJVS && git pull && sudo bash deploy/setup_server.sh
+Your data, settings and keys are kept.
+
+Handy commands (browser terminal):
+   sudo systemctl status mjvs          is it running?
+   sudo journalctl -u mjvs -n 100      last 100 log lines
+   sudo systemctl restart mjvs         restart the app
+Data folder on the server: /opt/mjvs/data (database + daily backups)
+Settings file:             /opt/mjvs/mjvs.env (secret keys; keep private)
+
+
+AVOID CHARGES
+-------------
+- Only use a plan labelled "First 3 months free". One server only.
+- Keep the Static IP ATTACHED (an unattached static IP is charged).
+- Do not create snapshots.
+- AWS Billing -> Budgets -> create a budget of Rs 1 so AWS emails you if anything costs money.
+- Before the 3 months end: either keep it (about Rs 450/month) or delete the instance AND
+  release the static IP (Networking tab). Download /opt/mjvs/data/mjvs.db first if you want it.
+Free offers can change: check the "3 months free" label before creating the instance.

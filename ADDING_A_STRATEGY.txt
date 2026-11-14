@@ -1,0 +1,56 @@
+HOW A STRATEGY IS ADDED TO ONE OF THE 8 ALGOS
+
+Each algo is one file in mjvs\algos\ (scalping.py, intraday.py, short_term.py, swing.py, long_term.py,
+penny.py, futures.py, options.py). Nothing else in the project changes.
+
+What is needed for each algo
+  1. ENTRY  - either a Chartink scanner (send the scan link or its conditions),
+              or an indicator rule (like: buy when RSI(8) > 60 and close > SMA 50).
+  2. EXIT   - stop loss %, target %, time limit, square-off time, and/or a sell rule.
+  3. SIZE   - how many stocks at once, money per trade (F&O: lots, strike, expiry).
+  4. TIMING - candle size (5 min, 15 min, daily) and when it may trade.
+
+Type A: Chartink entry (no code for the entry)
+    source = "chartink"
+    stop_loss_pct = 2          # sell if 2% below buy price
+    target_pct = 4             # sell if 4% above buy price
+    max_hold_days = 15         # or max_hold_minutes = 30 for scalping
+    ready = True
+  Then point the Chartink alert at the algo's webhook URL (Admin page).
+
+Type B: own scanner (indicator rule)
+    source = "scan"
+    interval = "15minute"      # or "day", "5minute" ...
+    universes = {"nifty50": "NIFTY 50 stocks"}   # file watchlists\nifty50.txt
+    default_universe = "nifty50"
+    columns = [("rsi", "RSI 14")]                # shown in the scanner table
+
+    def symbols(self, universe):
+        return read_watchlist(universe)
+
+    def indicators(self, df):            # df has open, high, low, close, volume
+        df["rsi"] = ...                  # add your indicator columns
+        return df
+
+    def signal(self, df):                # look at df.iloc[-1] (latest finished candle)
+        return "BUY" / "SELL" / "HOLD"
+
+    ready = True
+
+Type C: scanner + TradingView confirmation ("suggest me the stock")
+    Your strategy runs on TradingView (Pine Script) and its alert calls the algo's TradingView
+    webhook. A stock is used only when BOTH the scanner (Chartink or own scanner) AND the
+    TradingView strategy picked it on the same day. Matches appear on the Suggestions page.
+    require_tradingview = True
+    match_minutes = None       # or e.g. 60: both alerts within 60 minutes of each other
+    auto_trade = False         # False = suggest only; True = also buy the matches
+  TradingView alert message:
+    {"symbol": "{{ticker}}", "exchange": "{{exchange}}", "price": {{close}}, "action": "BUY"}
+  A second alert with "action": "SELL" exits a held position (when auto_trade is True).
+  Send the Pine Script, and I can also rebuild it in Python so it runs without TradingView.
+
+The engine already does the rest for every algo: schedule, paper mode, orders and fill
+prices, rejected orders, position sizing, stop loss / target / time exits, intraday
+square-off, the drawdown guard, and the website pages.
+
+Always test a new algo in paper mode for a few weeks before live.
