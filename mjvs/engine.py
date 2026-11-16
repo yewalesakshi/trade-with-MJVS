@@ -615,6 +615,60 @@ def daily_scans(s: Session, now: dt.datetime):
                     break
 
 
+# ---------------------------------------------------------------- pre-market scan
+# The first full scan of the day downloads ~2,800 charts (Kite allows ~3 a second: about 15 min).
+# Doing it before the market opens means the 9:20 runs and "Scan now" use saved charts (seconds).
+PREMARKET_SCAN = (dt.time(8, 30), dt.time(9, 15))
+_premarket = {"day": None, "running": False}
+
+
+def premarket_scan(now: dt.datetime | None = None, wait: bool = False):
+    """Every 5 minutes from 8:30 to 9:15 (Mon-Fri): once a member has connected Kite today, scan the
+    daily-candle algos (Swing, then Penny, which reuses the same charts) in the background."""
+    now = now or config.ist_now()
+    if now.weekday() >= 5 or not PREMARKET_SCAN[0] <= now.time() < PREMARKET_SCAN[1]:
+        return
+    if _premarket["day"] == now.date() or _premarket["running"]:
+        return
+    _premarket["running"] = True
+    t = threading.Thread(target=_premarket_run, args=(now,), daemon=True)
+    t.start()
+    if wait:
+        t.join()
+
+
+def _premarket_run(now: dt.datetime):
+    try:
+        with Session(db_engine) as s:
+            from .settings_store import is_admin
+            members = [m for m in s.query(Member).filter(Member.kite_token.isnot(None)).all() if token_fresh(m)]
+            if not members:
+                return                        # nobody connected yet: tried again in 5 minutes
+            members.sort(key=lambda m: not is_admin(s, m))
+            algos = [a for a in ALGOS.values() if a.ready and a.source == "scan" and a.interval == "day"]
+            algos.sort(key=lambda a: a.max_price is not None)      # the full list first (Swing)
+            for algo in algos:
+                for uni in (algo.universes or {"": ""}):
+                    for m in members:
+                        try:
+                            k = broker.client(m.kite_token)
+                            save_scan(s, algo.id, uni, scan(algo, k, algo_symbols(algo, uni, k), now))
+                            break
+                        except broker.TokenError:
+                            m.kite_token = None
+                            s.commit()
+                        except broker.PermissionError_:
+                            print("pre-market scan: " + broker.NO_MARKET_DATA)
+                            _premarket["day"] = now.date()
+                            return
+            _premarket["day"] = now.date()
+            print(f"pre-market scan done at {config.ist_now():%H:%M}")
+    except Exception as e:
+        print(f"pre-market scan failed: {e!r}")
+    finally:
+        _premarket["running"] = False
+
+
 def run_now(s: Session, sub: Subscription):
     """Paper test: one full cycle immediately, ignoring the clock and holidays."""
     algo, now = ALGOS[sub.algo_id], config.ist_now()
@@ -631,6 +685,8 @@ def start_scheduler():
     sched.add_job(tick, "cron", day_of_week="mon-fri", hour="9-15", minute="*",
                   max_instances=1, coalesce=True)
     from .db import backup_sqlite
+    sched.add_job(premarket_scan, "cron", day_of_week="mon-fri", hour="8-9", minute="*/5",
+                  max_instances=1, coalesce=True)                 # charts downloaded before 9:15
     sched.add_job(backup_sqlite, "cron", hour=18, minute=5)    # daily database backup
     try:
         backup_sqlite()                                         # and one at every start
