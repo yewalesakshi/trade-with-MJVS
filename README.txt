@@ -30,6 +30,11 @@ THE 8 ALGOS
   - Penny stock: same rule on WEEKLY candles (Monday-Friday; this week included up to the last
     trading day). Only stocks UNDER Rs 100. Buys the top 5 BUY stocks with the money split equally
     (Rs 1,000 -> Rs 200 each). Target 8%; stop loss = your drawdown limit (default 5%).
+    LIVE mode: after each buy fills, MJVS creates a GTT (OCO) in your Zerodha account with both
+    exits: target +8% and stop loss -drawdown%. Zerodha sells by itself, even if MJVS is off.
+    See them in Kite -> Orders -> GTT. The stop-loss leg sells at a limit 2% below its trigger so it
+    fills in a fast fall. MJVS records the sell at its next check; Positions shows each GTT's status.
+    If MJVS sells first (drawdown limit), it deletes the GTT, so shares are never sold twice.
   A full scan of about 2,000 stocks takes 10-15 minutes (Kite allows ~3 chart downloads a
   second); Swing and Penny share the downloaded data. Every BUY row has a Buy button that opens
   a Kite-style order window (Paper or Live, Market or Limit, CNC).

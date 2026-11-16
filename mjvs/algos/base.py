@@ -70,6 +70,7 @@ class Algo:
     default_drawdown = 10     # starting value of the drawdown slider
     max_price = None          # only stocks whose price is below this (Rs) are scanned and bought
     sl_from_drawdown = False  # True: each position's stop loss % = the member's drawdown limit
+    use_gtt = False           # True: in LIVE mode each buy gets a Zerodha GTT (OCO: target + stop loss)
     warning = ""              # shown in a red box above the settings (optional)
 
     # ---- when the engine runs it (IST, Mon–Fri)
@@ -156,7 +157,7 @@ class Algo:
                 "max_positions": self.max_positions, "min_amount": self.min_amount,
                 "max_drawdown": self.max_drawdown, "warning": self.warning,
                 "default_drawdown": self.default_drawdown, "max_price": self.max_price,
-                "sl_from_drawdown": self.sl_from_drawdown,
+                "sl_from_drawdown": self.sl_from_drawdown, "use_gtt": self.use_gtt,
                 "once_per_day": self.once_per_day, "require_tradingview": self.require_tradingview, "suggest": self.suggest,
                 "auto_trade": self.auto_trade, "match_minutes": self.match_minutes, "run_every": self.run_every,
                 "window": [self.window[0].strftime("%H:%M"), self.window[1].strftime("%H:%M")],

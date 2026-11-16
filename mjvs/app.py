@@ -266,9 +266,16 @@ def need_fresh_kite(m: Member):
 # ---------------------------------------------------------------- member dashboard
 def sub_view(s, sub: Subscription, prices: dict) -> dict:
     cash, held = eng.positions(s, sub)
-    pos = [{"symbol": sym, "qty": p.qty, "avg": round(p.avg, 2), "ltp": prices.get(sym),
-            "pnl": round((prices[sym] - p.avg) * p.qty, 2) if sym in prices else None,
-            "since": iso(p.entry_at)} for sym, p in held.items()]
+    pos = []
+    for sym, p in held.items():
+        row = {"symbol": sym, "qty": p.qty, "avg": round(p.avg, 2), "ltp": prices.get(sym),
+               "pnl": round((prices[sym] - p.avg) * p.qty, 2) if sym in prices else None,
+               "since": iso(p.entry_at), "gtt": None}
+        if not sub.paper:
+            t = eng.opening_buy(s, sub, sym)
+            if t and t.gtt_id:
+                row["gtt"] = {"id": t.gtt_id, "status": t.gtt_status, "sl": t.gtt_sl, "target": t.gtt_target}
+        pos.append(row)
     value = eng.account_value(cash, held, prices)
     if getattr(ALGOS.get(sub.algo_id), "group", "") == "fno":
         cash = value          # futures: money = amount + profit/loss (no shares bought with cash)

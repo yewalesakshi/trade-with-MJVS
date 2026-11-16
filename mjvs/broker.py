@@ -79,6 +79,44 @@ def _fetch(k, instrument_token: int, interval: str, candles: int, now: dt.dateti
     return df.set_index("date").tail(candles)
 
 
+# ---------------------------------------------------------------- GTT (Good Till Triggered)
+SL_LIMIT_GAP = 0.02      # the stop-loss leg sells at a LIMIT 2% below its trigger, so it fills in a fast fall
+
+
+def tick_round(price: float, tick: float = 0.05, down: bool = False) -> float:
+    import math
+    n = price / tick
+    return round((math.floor(n + 1e-9) if down else round(n)) * tick, 2)
+
+
+def place_gtt_oco(k, symbol: str, qty: int, sl_trigger: float, target_trigger: float,
+                  last_price: float, product: str = "CNC") -> str:
+    """One GTT with two exits (OCO): when either price is touched, Zerodha places that SELL order
+    and cancels the other. Returns the GTT id."""
+    exch, name = symbol.split(":")
+    sl_t, tg_t = tick_round(sl_trigger), tick_round(target_trigger)
+    leg = dict(exchange=exch, tradingsymbol=name, transaction_type=k.TRANSACTION_TYPE_SELL,
+               quantity=qty, order_type=k.ORDER_TYPE_LIMIT, product=product)
+    res = k.place_gtt(trigger_type=k.GTT_TYPE_OCO, tradingsymbol=name, exchange=exch,
+                      trigger_values=[sl_t, tg_t], last_price=last_price,
+                      orders=[{**leg, "price": tick_round(sl_t * (1 - SL_LIMIT_GAP), down=True)},
+                              {**leg, "price": tg_t}])
+    return str(res["trigger_id"] if isinstance(res, dict) else res)
+
+
+def gtt_info(k, gtt_id: str) -> dict:
+    """Kite's GTT record: status (active, triggered, cancelled, deleted, expired, disabled, rejected)
+    and, once triggered, the order Zerodha placed (orders[i]['result']['order_result']['order_id'])."""
+    return k.get_gtt(int(gtt_id))
+
+
+def delete_gtt(k, gtt_id: str):
+    try:
+        k.delete_gtt(int(gtt_id))
+    except Exception as e:
+        print(f"delete_gtt {gtt_id} failed: {e!r}")
+
+
 def available_cash(k) -> float | None:
     """Money free to trade in the member's Zerodha equity account (Kite 'margins'), or None
     if Kite does not answer. Shares and F&O use the same equity balance at Zerodha."""

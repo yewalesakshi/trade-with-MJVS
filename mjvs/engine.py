@@ -188,9 +188,108 @@ def reconcile_pending(s: Session, k, sub: Subscription):
     s.commit()
 
 
+# ---------------------------------------------------------------- GTT exits at Zerodha (live only)
+GTT_LIVE = ("active", "triggered")      # Zerodha still owns the exit of this position
+
+
+def opening_buy(s: Session, sub: Subscription, symbol: str):
+    """The live BUY that opened the current position in `symbol` (it carries the GTT)."""
+    return (s.query(Trade).filter(Trade.member_id == sub.member_id, Trade.algo_id == sub.algo_id,
+                                  Trade.mode == "live", Trade.symbol == symbol, Trade.side == "BUY",
+                                  Trade.status == "COMPLETE").order_by(Trade.id.desc()).first())
+
+
+def gtt_managed(s: Session, sub: Subscription, symbol: str) -> bool:
+    t = opening_buy(s, sub, symbol)
+    return bool(t and t.gtt_id and t.gtt_status in GTT_LIVE)
+
+
+def ensure_gtts(s: Session, k, sub: Subscription, algo, notes: list):
+    """Every live position without a GTT gets one: OCO with the target and the stop loss."""
+    _, held = positions(s, sub)
+    for sym, p in held.items():
+        if p.qty <= 0:
+            continue
+        t = opening_buy(s, sub, sym)
+        if not t or (t.gtt_id and t.gtt_status not in ("cancelled", "deleted", "expired", "disabled", "rejected")):
+            continue
+        sl_pct = sub.drawdown_pct if algo.sl_from_drawdown else (algo.stop_loss_pct or 5)
+        sl, tg = p.avg * (1 - sl_pct / 100), p.avg * (1 + (algo.target_pct or 8) / 100)
+        name = sym.split(":")[1]
+        try:
+            ltp = broker.ltp_many(k, [sym]).get(sym) or p.avg
+            if not sl < ltp < tg:          # already past a level: MJVS sells at this run instead
+                continue
+            t.gtt_id = broker.place_gtt_oco(k, sym, p.qty, sl, tg, ltp, algo.product)
+            t.gtt_status, t.gtt_sl, t.gtt_target = "active", broker.tick_round(sl), broker.tick_round(tg)
+            notes.append(f"GTT created for {name}: target {t.gtt_target:.2f}, stop loss {t.gtt_sl:.2f}")
+        except broker.TokenError:
+            raise
+        except Exception as e:
+            t.gtt_status = "error"
+            notes.append(f"GTT for {name} not created ({str(e)[:90]}); MJVS checks target / stop loss itself")
+        s.commit()
+
+
+def sync_gtts(s: Session, k, sub: Subscription, notes: list):
+    """Reads each GTT at Zerodha. When one has triggered and its SELL filled, the sell is recorded
+    here so the algo's money, positions and trades stay right."""
+    _, held = positions(s, sub)
+    for sym in held:
+        t = opening_buy(s, sub, sym)
+        if not t or not t.gtt_id or t.gtt_status not in GTT_LIVE:
+            continue
+        name = sym.split(":")[1]
+        try:
+            g = broker.gtt_info(k, t.gtt_id)
+        except broker.TokenError:
+            raise
+        except Exception as e:
+            notes.append(f"GTT {name}: could not read ({str(e)[:60]})")
+            continue
+        status = str(g.get("status") or "").lower()
+        if status == "active":
+            t.gtt_status = "active"
+            continue
+        if status != "triggered":                       # cancelled / deleted / expired in Kite
+            t.gtt_status = status or "unknown"
+            notes.append(f"GTT {name} is {t.gtt_status} in Kite; MJVS checks target / stop loss itself")
+            continue
+        t.gtt_status = "triggered"
+        done = [o for o in g.get("orders", []) if (o.get("result") or {}).get("order_result")]
+        if not done:
+            continue
+        o = done[0]
+        oid = str(o["result"]["order_result"].get("order_id") or "")
+        try:
+            last = k.order_history(oid)[-1] if oid else {}
+        except Exception:
+            last = {}
+        st, filled = last.get("status"), int(last.get("filled_quantity") or 0)
+        if st == "COMPLETE" or filled:
+            price = float(last.get("average_price") or o.get("price") or 0)
+            leg = "target" if price >= t.gtt_target * 0.995 or float(o.get("price") or 0) >= t.gtt_target else "stop loss"
+            s.add(Trade(member_id=sub.member_id, algo_id=sub.algo_id, symbol=sym, side="SELL",
+                        qty=filled or int(o.get("quantity") or held[sym].qty), price=price, mode="live",
+                        status="COMPLETE", reason=f"GTT {leg} (Zerodha)", order_id=oid))
+            t.gtt_status = "done"
+            notes.append(f"SOLD {name} @ {price:.2f} by GTT {leg}")
+        elif st in ("REJECTED", "CANCELLED"):
+            t.gtt_status = "error"
+            notes.append(f"GTT sell for {name} was {st.lower()} by Zerodha; MJVS checks target / stop loss itself")
+        else:
+            notes.append(f"GTT sell order for {name} is open in Kite ({st or 'waiting'})")
+    s.commit()
+
+
 def sell(s, k, sub, algo, symbol, ours: int, reason: str, notes: list):
     q = ours
     if not sub.paper:
+        t = opening_buy(s, sub, symbol)
+        if t and t.gtt_id and t.gtt_status == "active":
+            broker.delete_gtt(k, t.gtt_id)
+            t.gtt_status = "deleted"
+            s.commit()
         q = min(ours, broker.available_qty(k, symbol, algo.product))
         if q < ours:
             notes.append(f"{symbol}: algo record shows {ours}, Kite shows {q}")
@@ -249,6 +348,8 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
         return
     if not sub.paper:
         reconcile_pending(s, k, sub)
+        if algo.use_gtt:
+            sync_gtts(s, k, sub, notes)
 
     cash, held = positions(s, sub)
     prices = broker.ltp_many(k, list(held))
@@ -269,6 +370,8 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
     # 2. Exits
     by_trade = {r["trade_symbol"]: r for r in rows or []}
     for sym, p in list(held.items()):
+        if not sub.paper and algo.use_gtt and gtt_managed(s, sub, sym):
+            continue                     # Zerodha's GTT sells it at the target or stop loss
         reason = algo.exit_reason(p, prices.get(sym), now, by_trade.get(sym))
         ltp = prices.get(sym)
         if not reason and algo.sl_from_drawdown and ltp and p.avg and p.qty > 0 and \
@@ -312,6 +415,9 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
                 notes.append(f"BOUGHT {res[0]} {name} @ {res[1]:.2f}")
             else:
                 notes.append(f"BUY {name} rejected by Kite")
+
+    if not sub.paper and algo.use_gtt:
+        ensure_gtts(s, k, sub, algo, notes)
 
     head = "Manual paper run" if manual else "Run"
     if algo.source == "scan":

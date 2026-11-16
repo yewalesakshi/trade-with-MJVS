@@ -470,10 +470,17 @@ function tradeRows(list, withAlgo) {
       "</td><td>" + (t.mode === "paper" ? '<span class="badge accent">Paper</span>' : (t.status === "REJECTED" ? '<span class="badge bad">Rejected</span>' : '<span class="badge">' + esc(t.status) + "</span>")) + '</td><td class="wrap">' + esc(t.reason) + "</td></tr>";
   });
 }
-function posRows(list, withAlgo) {
+function posRows(list, withAlgo, withGtt) {
   return list.map(function (p) {
-    return "<tr>" + (withAlgo ? "<td>" + esc(p.algo) + "</td>" : "") + "<td><b>" + short(p.symbol) + "</b></td><td>" + p.qty + "</td><td>" + px.format(p.avg) + "</td><td>" + (p.ltp == null ? "—" : px.format(p.ltp)) + "</td><td>" + signed(p.pnl) + "</td><td>" + when(p.since) + "</td></tr>";
+    return "<tr>" + (withAlgo ? "<td>" + esc(p.algo) + "</td>" : "") + "<td><b>" + short(p.symbol) + "</b></td><td>" + p.qty + "</td><td>" + px.format(p.avg) + "</td><td>" + (p.ltp == null ? "—" : px.format(p.ltp)) + "</td><td>" + signed(p.pnl) + "</td><td>" + when(p.since) + "</td>" + (withGtt ? "<td>" + gttCell(p.gtt) + "</td>" : "") + "</tr>";
   });
+}
+function gttCell(g) {
+  if (!g) return '<span class="muted small">—</span>';
+  var lbl = { active: "GTT active", triggered: "GTT triggered", done: "GTT done", error: "GTT error", deleted: "GTT deleted", cancelled: "GTT cancelled", expired: "GTT expired" }[g.status] || ("GTT " + g.status);
+  var cls = g.status === "active" ? "good" : g.status === "triggered" ? "" : "bad";
+  return '<span class="badge ' + cls + '" title="Zerodha GTT ' + esc(g.id) + '">' + esc(lbl) + "</span>" +
+    (g.sl ? '<div class="small muted num">SL ' + px.format(g.sl) + " · Target " + px.format(g.target) + "</div>" : "");
 }
 function bindRowLinks() { document.querySelectorAll("tr[data-go]").forEach(function (tr) { tr.onclick = function () { go(tr.getAttribute("data-go")); }; }); }
 
@@ -742,7 +749,8 @@ function appAlgo(id) {
       '</b></div><div class="row"><span>Peak value</span><b class="num">' + money.format(s.peak) + '</b></div><div class="row"><span>Stops below</span><b class="num">' + money.format(s.peak * (1 - s.drawdown_pct / 100)) + " (" + s.drawdown_pct + "%)</b></div>"
       : '<div class="empty">Set the money and limit, then start in paper mode.</div>';
     $("lastmsg").textContent = s && s.last_message ? (s.last_run_at ? when(s.last_run_at) + " · " : "") + s.last_message : "Not started yet.";
-    $("ps").innerHTML = table(["Symbol", "Qty", "Avg", "LTP", "P&amp;L", "Since"], posRows(s ? s.positions : []), "No open positions.");
+    var gt = !!(a.use_gtt && s && !s.paper);
+    $("ps").innerHTML = table(["Symbol", "Qty", "Avg", "LTP", "P&amp;L", "Since"].concat(gt ? ["Zerodha GTT"] : []), posRows(s ? s.positions : [], false, gt), "No open positions.");
     $("ts").innerHTML = table(["Time", "Side", "Symbol", "Qty", "Price", "Type", '<span class="l">Note</span>'], tradeRows(DASH.trades.filter(function (t) { return t.algo_id === id; })), "No trades yet.");
   };
   PAGE.reload = function () { loadSignals($("sc-uni") ? $("sc-uni").value : uni); };
@@ -755,7 +763,7 @@ function allPositions() {
 }
 function appPositions() {
   appLayout("positions", "Positions", '<div class="card"><div class="card-head"><div><h3>Open positions</h3><p class="muted small">From each algo’s own trades. Prices update while Kite is connected.</p></div></div><div id="ps"></div></div>');
-  PAGE.paint = function () { $("ps").innerHTML = table(["Algo", "Symbol", "Qty", "Avg", "LTP", "P&amp;L", "Since"], posRows(allPositions(), true), "No open positions."); };
+  PAGE.paint = function () { $("ps").innerHTML = table(["Algo", "Symbol", "Qty", "Avg", "LTP", "P&amp;L", "Since", "Zerodha GTT"], posRows(allPositions(), true, true), "No open positions."); };
 }
 function appTrades() {
   appLayout("trades", "Trades", '<div class="card"><div class="card-head"><div><h3>All trades</h3><p class="muted small">Every trade is saved permanently, paper and live.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm quiet" type="button" id="tcsv">Download CSV</button><select id="tf" style="width:auto"><option value="">All algos</option>' + CFG.algos.map(function (a) { return '<option value="' + a.id + '">' + esc(a.name) + "</option>"; }).join("") + '</select></div></div><div id="ts"></div></div>');

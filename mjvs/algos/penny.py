@@ -12,6 +12,9 @@ MONEY: the top 5 BUY stocks (strongest RSI first), money split equally (e.g. Rs 
 EXIT: target 8% above the buy price; stop loss = the member's drawdown limit (default 5%) below it.
   The whole algo also stops if it falls that % from its peak. Checked every 15 minutes.
 Each stock is bought once a week. Scans ALL NSE stocks under Rs 100. Small stocks can be illiquid.
+LIVE MODE: right after each buy fills, a GTT OCO is created in the member's Zerodha account with
+  both exits (target +8%, stop loss -drawdown%). Zerodha then sells by itself, even if MJVS is off.
+  MJVS checks the GTT every run and records the sell when it triggers (see engine.sync_gtts).
 """
 from . import rules
 from .base import Algo, read_watchlist
@@ -48,8 +51,11 @@ class Penny(Algo):
     default_drawdown = 5
     max_price = 100                       # only stocks under Rs 100
     max_positions = 5                     # top 5 BUY stocks, money split equally
+    use_gtt = True                        # Live: target + stop loss also placed as a Zerodha GTT (OCO)
     exits_note = ("Target 8% above the buy price. Stop loss = your drawdown limit (default 5%) below the buy price. "
-                  "The whole algo also stops if it falls that % from its peak.")
+                  "The whole algo also stops if it falls that % from its peak. "
+                  "LIVE: both exits are also placed in your Zerodha account as a GTT (OCO), so Zerodha sells "
+                  "even if MJVS is off.")
 
     def symbols(self, universe, kite=None):
         listed = read_watchlist(universe) if universe != "all" else []

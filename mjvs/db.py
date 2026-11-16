@@ -77,6 +77,11 @@ class Trade(Base):
     mode: Mapped[str] = mapped_column(String, default="live")         # paper | live
     status: Mapped[str] = mapped_column(String, default="COMPLETE")   # COMPLETE PENDING REJECTED PAPER
     reason: Mapped[str] = mapped_column(String, default="")
+    # Zerodha GTT (OCO target + stop loss) placed after a live BUY: id, status and trigger prices
+    gtt_id: Mapped[str] = mapped_column(String, default="")
+    gtt_status: Mapped[str] = mapped_column(String, default="")
+    gtt_sl: Mapped[float] = mapped_column(Float, default=0.0)
+    gtt_target: Mapped[float] = mapped_column(Float, default=0.0)
 
 
 class Signal(Base):
@@ -156,7 +161,9 @@ NEW_COLUMNS = {
     "signals": {"action": "VARCHAR DEFAULT 'BUY'"},
     "feedback": {"topic": "VARCHAR DEFAULT ''", "name": "VARCHAR DEFAULT ''", "contact": "VARCHAR DEFAULT ''"},
     "trades": {"algo_id": "VARCHAR DEFAULT 'swing'", "mode": "VARCHAR DEFAULT 'live'",
-               "status": "VARCHAR DEFAULT 'COMPLETE'", "reason": "VARCHAR DEFAULT ''"},
+               "status": "VARCHAR DEFAULT 'COMPLETE'", "reason": "VARCHAR DEFAULT ''",
+               "gtt_id": "VARCHAR DEFAULT ''", "gtt_status": "VARCHAR DEFAULT ''",
+               "gtt_sl": "FLOAT DEFAULT 0", "gtt_target": "FLOAT DEFAULT 0"},
 }
 
 
