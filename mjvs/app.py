@@ -743,6 +743,9 @@ class ManualOrder(BaseModel):
     price: float | None = Field(default=None, gt=0)
     product: str = Field(default="CNC", pattern="^(CNC|MIS|NRML)$")
     paper: bool = True
+    gtt: bool = False                                # LIVE CNC buy: also create a GTT (target + stop loss)
+    target_pct: float = Field(default=8, ge=0.5, le=100)
+    sl_pct: float = Field(default=5, ge=0.5, le=50)
 
 
 @app.post("/orders/manual")
@@ -791,15 +794,30 @@ def manual_order(b: ManualOrder, mid: int = Depends(current_member_id)):
             raise HTTPException(400, f"Zerodha refused the order: {str(e)[:200]}")
         st, avg, filled, msg = broker.wait_for_fill(k, order_id, tries=3)
         status = "COMPLETE" if st == "COMPLETE" else "REJECTED" if st in ("REJECTED", "CANCELLED") and not filled else "PENDING"
-        s.add(Trade(member_id=mid, algo_id="manual", symbol=full, side=b.side, qty=filled or qty,
-                    price=avg or price or ltp or 0, mode="live", status=status,
-                    reason=(msg if status == "REJECTED" else note)[:200], order_id=order_id))
+        t = Trade(member_id=mid, algo_id="manual", symbol=full, side=b.side, qty=filled or qty,
+                  price=avg or price or ltp or 0, mode="live", status=status,
+                  reason=(msg if status == "REJECTED" else note)[:200], order_id=order_id)
+        s.add(t)
         s.commit()
         if status == "REJECTED":
             raise HTTPException(400, f"Zerodha rejected the order: {msg or st}")
+        gtt_msg = ""
+        if b.gtt and b.side == "BUY" and b.product == "CNC":
+            if status == "COMPLETE" and avg:
+                sl, tg = avg * (1 - b.sl_pct / 100), avg * (1 + b.target_pct / 100)
+                try:
+                    t.gtt_id = broker.place_gtt_oco(k, full, filled or qty, sl, tg, ltp or avg, "CNC")
+                    t.gtt_status, t.gtt_sl, t.gtt_target = "active", broker.tick_round(sl), broker.tick_round(tg)
+                    gtt_msg = f" GTT created in Zerodha: target {t.gtt_target:.2f}, stop loss {t.gtt_sl:.2f}."
+                except Exception as e:
+                    t.gtt_status = "error"
+                    gtt_msg = f" GTT NOT created ({str(e)[:100]}). Add it in Kite: Orders -> GTT."
+                s.commit()
+            else:
+                gtt_msg = " The order has not filled yet, so no GTT was created: add it in Kite (Orders -> GTT) once it fills."
         return {"ok": True, "order_id": order_id,
-                "message": (f"Done: {b.side} {filled or qty} {ins['symbol']} at {avg:.2f}" if status == "COMPLETE"
-                            else f"Order placed (id {order_id}). Status: {st}. See Your Zerodha account below.")}
+                "message": (f"Done: {b.side} {filled or qty} {ins['symbol']} at {avg:.2f}." if status == "COMPLETE"
+                            else f"Order placed (id {order_id}). Status: {st}. See Your Zerodha account below.") + gtt_msg}
 
 
 def _src(tag: str | None) -> str:
@@ -814,7 +832,18 @@ def kite_account(mid: int = Depends(current_member_id)):
         orders = kite_call(s, m, k.orders) or []
         pos = (kite_call(s, m, k.positions) or {}).get("net", [])
         hold = kite_call(s, m, k.holdings) or []
+        try:
+            gtts = k.get_gtts() or []
+        except Exception:
+            gtts = []
     return {
+        "gtts": [{"id": g.get("id"), "status": g.get("status"), "type": g.get("type"),
+                  "symbol": f'{(g.get("condition") or {}).get("exchange")}:{(g.get("condition") or {}).get("tradingsymbol")}',
+                  "triggers": (g.get("condition") or {}).get("trigger_values") or [],
+                  "qty": ((g.get("orders") or [{}])[0]).get("quantity"),
+                  "side": ((g.get("orders") or [{}])[0]).get("transaction_type"),
+                  "created": str(g.get("created_at") or "")} for g in gtts
+                 if g.get("status") in ("active", "triggered")],
         "orders": [{"id": o.get("order_id"), "time": str(o.get("order_timestamp") or ""),
                     "symbol": f'{o.get("exchange")}:{o.get("tradingsymbol")}', "side": o.get("transaction_type"),
                     "qty": o.get("quantity"), "filled": o.get("filled_quantity"), "price": o.get("price"),

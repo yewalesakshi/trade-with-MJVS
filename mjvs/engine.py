@@ -421,24 +421,31 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
             if sym not in seen:
                 seen.add(sym)
                 picks.append((sym, note))
-        picks = picks[:max(slots, 0)]
-        buy_prices = broker.ltp_many(k, [sym for sym, _ in picks])
+        # Walk down the BUY list (strongest first) until the free slots are filled: a stock that
+        # costs more than one slot's money (or is above the price limit) is skipped for the next one.
+        buy_prices = broker.ltp_many(k, [sym for sym, _ in picks]) if slots > 0 else {}
+        bought, skipped = 0, []
         for sym, note in picks:
+            if bought >= slots:
+                break
             price = buy_prices.get(sym)
             name = sym.split(":")[1]
             if price and algo.max_price and price >= algo.max_price:
-                notes.append(f"{name}: price {price:.2f} is not under Rs {algo.max_price}, not bought")
+                skipped.append(f"{name} (not under Rs {algo.max_price})")
                 continue
             units = algo.quantity(price, min(slot_cash, cash)) if price else 0
             if units < 1:
-                notes.append(f"{name}: not enough cash for 1 unit" if price else f"{name}: no price on Kite")
+                skipped.append(f"{name} ({'Rs ' + format(price, ',.2f') + ' is more than one slot' if price else 'no price on Kite'})")
                 continue
             res = place(s, k, sub, algo, sym, "BUY", units, note)
             if res:
                 cash -= res[0] * res[1]
+                bought += 1
                 notes.append(f"BOUGHT {res[0]} {name} @ {res[1]:.2f}")
             else:
                 notes.append(f"BUY {name} rejected by Kite")
+        if skipped:
+            notes.append("skipped: " + ", ".join(skipped[:8]) + (f" and {len(skipped) - 8} more" if len(skipped) > 8 else ""))
 
     if not sub.paper and algo.use_gtt:
         ensure_gtts(s, k, sub, algo, notes)

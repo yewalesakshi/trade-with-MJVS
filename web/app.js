@@ -783,10 +783,15 @@ function openOrderPad(sym, px0) {
     '<div class="opad-b"><div class="grid g2" style="gap:12px"><div class="field"><label for="opad-q">Qty.</label><input id="opad-q" type="number" min="1" step="1" value="1"></div>' +
     '<div class="field"><label for="opad-p">Price</label><input id="opad-p" type="number" min="0" step="0.05" value="' + (px0 || "") + '" disabled></div></div>' +
     '<div class="field"><div class="seg" id="opad-type"><button type="button" data-v="MARKET" aria-pressed="true">Market</button><button type="button" data-v="LIMIT" aria-pressed="false">Limit</button></div>' +
-    '<span class="badge" style="margin-left:8px">CNC · Delivery</span></div><p class="small muted" id="opad-est"></p><p id="opad-msg" class="msg" role="status"></p></div>' +
+    '<span class="badge" style="margin-left:8px">CNC · Delivery</span></div>' +
+    '<div class="field" id="opad-gttw"><label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" id="opad-gtt" checked style="width:auto"> Also create a GTT in Zerodha (auto exit)</label>' +
+    '<div class="grid g2" style="gap:12px;margin-top:6px"><div class="field" style="margin:0"><label for="opad-tg">Target %</label><input id="opad-tg" type="number" min="0.5" max="100" step="0.5" value="8"></div>' +
+    '<div class="field" style="margin:0"><label for="opad-sl">Stop loss %</label><input id="opad-sl" type="number" min="0.5" max="50" step="0.5" value="5"></div></div>' +
+    '<small class="muted">After the buy fills, Zerodha sells by itself at the target or the stop loss (stop loss sells at a limit 2% lower so it fills). Live only.</small></div>' +
+    '<p class="small muted" id="opad-est"></p><p id="opad-msg" class="msg" role="status"></p></div>' +
     '<div class="opad-f"><button type="button" class="btn opad-go" id="opad-go">Buy</button><button type="button" class="btn quiet" id="opad-x">Cancel</button></div></div>';
   document.body.appendChild(el);
-  function est() { var q = +$("opad-q").value || 0, p = otype === "LIMIT" ? +$("opad-p").value : px0; $("opad-est").textContent = q && p ? "Approx. " + money.format(q * p) + (live ? " · LIVE order in your Zerodha account" : " · paper order (no real money)") : ""; $("opad-go").textContent = live ? "Buy (LIVE)" : "Buy (paper)"; }
+  function est() { var q = +$("opad-q").value || 0, p = otype === "LIMIT" ? +$("opad-p").value : px0; $("opad-est").textContent = q && p ? "Approx. " + money.format(q * p) + (live ? " · LIVE order in your Zerodha account" : " · paper order (no real money)") : ""; $("opad-go").textContent = live ? "Buy (LIVE)" : "Buy (paper)"; $("opad-gttw").hidden = !live; }
   function close() { el.remove(); document.removeEventListener("keydown", esc_); }
   function esc_(e) { if (e.key === "Escape") close(); }
   document.addEventListener("keydown", esc_);
@@ -798,11 +803,12 @@ function openOrderPad(sym, px0) {
   $("opad-go").onclick = function () {
     var m = $("opad-msg"), btn = this, q = +$("opad-q").value;
     if (!(q >= 1)) { say(m, false, "Enter a quantity of 1 or more"); return; }
-    var body = { symbol: sym, side: "BUY", lots: q, order_type: otype, product: "CNC", paper: !live };
+    var body = { symbol: sym, side: "BUY", lots: q, order_type: otype, product: "CNC", paper: !live,
+                 gtt: live && $("opad-gtt").checked, target_pct: +$("opad-tg").value || 8, sl_pct: +$("opad-sl").value || 5 };
     if (otype === "LIMIT") body.price = +$("opad-p").value;
-    if (live && !confirm("Place a LIVE BUY order for " + q + " " + name + " in your Zerodha account?")) return;
+    if (live && !confirm("Place a LIVE BUY order for " + q + " " + name + " in your Zerodha account?" + (body.gtt ? "\nThen a GTT: target +" + body.target_pct + "%, stop loss -" + body.sl_pct + "%." : ""))) return;
     btn.disabled = true; say(m, true, "Sending…");
-    api("/orders/manual", { method: "POST", json: body }).then(function (x) { btn.disabled = false; say(m, x.ok, x.ok ? x.d.message : errText(x, "Order failed")); if (x.ok) { toast(x.d.message); setTimeout(close, 1500); } }).catch(function () { btn.disabled = false; say(m, false, "Could not reach the server"); });
+    api("/orders/manual", { method: "POST", json: body }).then(function (x) { btn.disabled = false; say(m, x.ok, x.ok ? x.d.message : errText(x, "Order failed")); if (x.ok) { toast(x.d.message); setTimeout(close, body.gtt ? 5000 : 1500); } }).catch(function () { btn.disabled = false; say(m, false, "Could not reach the server"); });
   };
   est(); $("opad-q").focus();
 }
@@ -849,7 +855,7 @@ function appTrade() {
     '<input id="tq" type="search" placeholder="Search a stock, future or option" autocomplete="off" aria-label="Search instruments"><p id="tq-msg" class="msg small" role="status"></p><div id="tq-res" class="ires"></div></div>' +
     '<div class="card" id="ticket"><h3>Order</h3><div class="empty" style="margin-top:12px">Search and pick an instrument to see its price and place an order.</div></div></div>' +
     '<div class="card"><div class="card-head"><div><h3>Your Zerodha account today</h3><p class="muted small">Every order, position and holding in your Zerodha account, from any app: MJVS, the Kite app, Streak and others.</p></div>' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap"><div class="seg" id="acc-tab"><button type="button" data-v="orders">Orders</button><button type="button" data-v="positions">Positions</button><button type="button" data-v="holdings">Holdings</button></div><button class="btn sm quiet" type="button" id="acc-r">Refresh</button></div></div><p id="acc-msg" class="msg small" role="status"></p><div id="acc"></div></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap"><div class="seg" id="acc-tab"><button type="button" data-v="orders">Orders</button><button type="button" data-v="positions">Positions</button><button type="button" data-v="holdings">Holdings</button><button type="button" data-v="gtt">GTT</button></div><button class="btn sm quiet" type="button" id="acc-r">Refresh</button></div></div><p id="acc-msg" class="msg small" role="status"></p><div id="acc"></div></div>' +
     '<div class="card"><div class="card-head"><div><h3>My manual trades</h3><p class="muted small">Orders placed on this page. Paper positions are worked out from your paper trades.</p></div></div><div id="mt-pos"></div><div id="mt"></div></div>' +
     '<div class="card streak"><div class="card-head"><div><h3>Zerodha Streak</h3><p class="muted small">Streak is Zerodha’s partner app for no-code strategies. It logs in with the same Zerodha account.</p></div><a class="btn" href="https://www.streak.tech/" target="_blank" rel="noopener noreferrer">Open Streak ↗</a></div>' +
     '<ul class="muted" style="margin:0;padding-left:20px;font-size:14px"><li>Orders that Streak places go into your same Zerodha account, so they appear above in <b>Your Zerodha account today</b>, marked “Kite / Streak / other app”.</li>' +
@@ -943,6 +949,11 @@ function appTrade() {
           '</td><td><span class="badge' + (o.status === "COMPLETE" ? " good" : o.status === "REJECTED" ? " bad" : "") + '" title="' + esc(o.message || "") + '">' + esc(o.status) + "</span></td><td>" + esc(o.source) + "</td><td>" + (open ? '<button class="btn sm quiet" type="button" data-cancel="' + esc(o.id) + '" data-var="' + esc(o.variety || "regular") + '">Cancel</button>' : "") + "</td></tr>";
       }), "No orders in your Zerodha account today.");
       if (TR.tab === "positions") $("acc").innerHTML = table(["Symbol", "Product", "Qty", "Avg", "LTP", "P&amp;L"], d.positions.map(function (p) { return "<tr><td><b>" + short(p.symbol) + "</b></td><td>" + esc(p.product) + "</td><td>" + p.qty + "</td><td>" + px.format(p.avg || 0) + "</td><td>" + px.format(p.ltp || 0) + "</td><td>" + signed(p.pnl) + "</td></tr>"; }), "No open positions today.");
+      if (TR.tab === "gtt") $("acc").innerHTML = table(["Symbol", "Qty", "Stop loss", "Target", "Status", "Created"], (d.gtts || []).map(function (g) {
+        var tv = g.triggers || [], two = tv.length === 2;
+        return "<tr><td><b>" + short(g.symbol) + "</b></td><td>" + (g.qty || "—") + "</td><td>" + (two ? px.format(tv[0]) : "—") + "</td><td>" + (two ? px.format(tv[1]) : (tv[0] ? px.format(tv[0]) : "—")) +
+          '</td><td><span class="badge ' + (g.status === "active" ? "good" : "") + '">' + esc(g.status) + "</span></td><td>" + esc(String(g.created).slice(0, 16)) + "</td></tr>";
+      }), "No active GTT in your Zerodha account.");
       if (TR.tab === "holdings") $("acc").innerHTML = table(["Symbol", "Qty", "Avg", "LTP", "P&amp;L"], d.holdings.map(function (h) { return "<tr><td><b>" + short(h.symbol) + "</b></td><td>" + h.qty + "</td><td>" + px.format(h.avg || 0) + "</td><td>" + px.format(h.ltp || 0) + "</td><td>" + signed(h.pnl) + "</td></tr>"; }), "No holdings.");
       $("acc").querySelectorAll("[data-cancel]").forEach(function (b) { b.onclick = function () {
         if (!confirm("Cancel this order in Zerodha?")) return;

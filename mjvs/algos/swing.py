@@ -3,23 +3,25 @@ SWING — READY. Daily candles. (Rule: mjvs/algos/rules.py)
 
 BUY on the daily candle where all three first become true together:
   1. close crosses above the 50 SMA        2. RSI(8) above 60        3. Bollinger %b(50, SD 1) above 51
-EXIT: target 8% above the buy price, stop loss 5% below it.
-Signals use completed daily candles (checked from 9:20). Target and stop loss are checked
-every 15 minutes during market hours. Scans ALL NSE stocks (about 2,000; 10-15 minutes).
+Signals use the last completed trading day (checked from 9:20). Scans ALL NSE stocks, no price limit.
+MONEY: the top 5 BUY stocks (strongest RSI first), money split equally. A stock that costs more than
+  one slot's money is skipped and the next BUY stock is bought instead, so the slots still fill.
+EXIT: target 8% above the buy price; stop loss = the member's drawdown limit (default 5%) below it.
+  The whole algo also stops if it falls that % from its peak. Checked every 15 minutes.
+LIVE MODE: after each buy fills, a GTT OCO (target + stop loss) is created in Zerodha, which then
+  sells by itself even if MJVS is off; MJVS records the sell at its next check (engine.sync_gtts).
 (Earlier strategy versions are kept in the legacy folder.)
 """
 from . import rules
 from .base import Algo, read_watchlist
 from .universe import all_stocks
 
-INDEX_TO_ETF = {"NSE:NIFTY 50": "NSE:NIFTYBEES", "NSE:NIFTY BANK": "NSE:BANKBEES"}
-
 
 class Swing(Algo):
     id = "swing"
     name = "Swing"
     stars = 2
-    holding = "3–6 months"
+    holding = "Days to weeks"
     blurb = "Fewer trades, held through short market swings."
     ready = True
     source = "scan"
@@ -34,11 +36,16 @@ class Swing(Algo):
     once_per_day = False      # entries from the daily scan; target / stop loss checked through the day
     run_every = 15
     target_pct = 8
-    stop_loss_pct = 5
+    stop_loss_pct = None                  # the stop loss is the member's drawdown limit (below)
+    sl_from_drawdown = True               # stop loss % = drawdown slider (default 5%)
+    default_drawdown = 5
+    use_gtt = True                        # Live: target + stop loss also placed as a Zerodha GTT (OCO)
+    exits_note = ("Target 8% above the buy price. Stop loss = your drawdown limit (default 5%) below the buy price. "
+                  "The whole algo also stops if it falls that % from its peak. "
+                  "LIVE: both exits are also placed in your Zerodha account as a GTT (OCO), so Zerodha sells "
+                  "even if MJVS is off.")
 
     def symbols(self, universe, kite=None):
-        if universe == "index":          # older setting (not offered on the site any more)
-            return list(INDEX_TO_ETF)
         listed = read_watchlist(universe) if universe != "all" else []
         if listed:                       # a watchlists/<name>.txt file, if one is chosen
             return listed
@@ -49,12 +56,3 @@ class Swing(Algo):
 
     def signal(self, df):
         return "BUY" if bool(df["buy_signal"].iloc[-1]) else "HOLD"
-
-    def order_symbol(self, signal_symbol):
-        return INDEX_TO_ETF.get(signal_symbol, signal_symbol)
-
-    def signal_symbol(self, order_symbol):
-        for sig, order in INDEX_TO_ETF.items():
-            if order == order_symbol:
-                return sig
-        return order_symbol
