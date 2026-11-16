@@ -95,17 +95,14 @@ def scan(algo, k, symbols: list[str], now: dt.datetime, progress=None) -> list[d
     quotes = {}
     for i in range(0, len(symbols), 500):
         quotes.update(k.ltp(symbols[i:i + 500]))
-    rows = []
-    for n, sym in enumerate(symbols):
-        if progress:
-            progress(n, len(symbols))
+
+    def one(sym):
         base = {"symbol": sym, "trade_symbol": algo.order_symbol(sym)}
         q = quotes.get(sym)
         if not q:
-            rows.append({**base, "signal": "ERROR", "error": "Symbol not found on Kite"})
-            continue
+            return {**base, "signal": "ERROR", "error": "Symbol not found on Kite"}
         if algo.max_price and float(q.get("last_price") or 0) >= algo.max_price:
-            continue             # e.g. Penny stock: only stocks under Rs 100
+            return None              # e.g. Penny stock: only stocks under Rs 100 (no download needed)
         try:
             df = broker.history(k, q["instrument_token"], algo.interval, algo.candles, now)
             if len(df) < algo.candles - 30:
@@ -120,12 +117,39 @@ def scan(algo, k, symbols: list[str], now: dt.datetime, progress=None) -> list[d
                     row[key] = v
                 else:
                     row[key] = None if v is None or pd.isna(v) else round(float(v), 3 if abs(float(v)) < 10 else 2)
-            rows.append(row)
+            return row
         except (broker.TokenError, broker.PermissionError_):
             raise                # a login or plan problem: stop instead of failing every stock
         except Exception as e:   # one bad symbol must not stop the scan
-            rows.append({**base, "signal": "ERROR", "error": str(e)[:120]})
-        time.sleep(broker.HISTORY_PAUSE)
+            return {**base, "signal": "ERROR", "error": str(e)[:120]}
+
+    # Downloads run in parallel threads; broker keeps them within Kite's ~3 charts a second.
+    from concurrent.futures import ThreadPoolExecutor
+    rows, done, lock, stop = [None] * len(symbols), [0], threading.Lock(), threading.Event()
+
+    def work(i, sym):
+        if stop.is_set():
+            return
+        try:
+            rows[i] = one(sym)
+        except Exception:
+            stop.set()
+            raise
+        finally:
+            with lock:
+                done[0] += 1
+                if progress:
+                    progress(done[0], len(symbols))
+
+    try:
+        with ThreadPoolExecutor(max_workers=broker.SCAN_THREADS) as pool:
+            futures = [pool.submit(work, i, sym) for i, sym in enumerate(symbols)]
+            for f in futures:
+                f.result()           # re-raises a Kite login / plan error from any thread
+    finally:
+        if algo.interval == "day":
+            broker.save_day_cache()
+    rows = [r for r in rows if r]
     order = {"BUY": 0, "HOLD": 1, "SELL": 2, "ERROR": 3}
     first_col = algo.columns[0][0] if algo.columns else None
     rows.sort(key=lambda r: (order.get(r["signal"], 9), -((r.get(first_col) or 0) if first_col else 0)))

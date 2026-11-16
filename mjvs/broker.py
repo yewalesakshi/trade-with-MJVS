@@ -1,4 +1,7 @@
 """Everything that talks to Zerodha Kite lives here."""
+import os
+import pickle
+import threading
 import time
 import datetime as dt
 
@@ -22,6 +25,25 @@ NO_MARKET_DATA = ("Your Kite app's plan does not include market data (live price
                   "switch the MJVS app to the paid \"Connect\" plan (includes live and historical data), then "
                   "press Connect Zerodha again and try once more.")
 HISTORY_PAUSE = 0.35       # Kite allows about 3 historical-data calls per second
+HISTORY_RATE = 2.9         # chart downloads started per second, shared by all threads (Kite's limit is 3)
+SCAN_THREADS = 4           # parallel downloads during a scan (the rate above is still respected)
+
+
+class _RateLimiter:
+    """Spaces out calls so at most `per_sec` start each second, across all threads."""
+    def __init__(self, per_sec: float):
+        self.gap, self.next, self.lock = 1.0 / per_sec, 0.0, threading.Lock()
+
+    def wait(self):
+        with self.lock:
+            start = max(time.monotonic(), self.next)
+            self.next = start + self.gap
+        delay = start - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+
+
+_history_limit = _RateLimiter(HISTORY_RATE)
 INTERVAL_MINUTES = {"minute": 1, "3minute": 3, "5minute": 5, "10minute": 10, "15minute": 15,
                     "30minute": 30, "60minute": 60}
 
@@ -43,6 +65,37 @@ def ltp_many(k, symbols) -> dict:
 
 DAY_FETCH = 340                 # daily candles fetched per stock: enough for weekly (Penny) and daily (Swing)
 _day_cache: dict = {}           # (date, token) -> completed daily candles, shared by all algos for the day
+_day_lock = threading.Lock()
+# The day's candles are also saved to disk, so a restart or a second scan the same day needs no downloads.
+CANDLE_CACHE = os.path.join(os.path.dirname(config.BACKUP_DIR.rstrip("/\\")) or ".", "candles-today.pkl")
+
+
+def _load_day_cache(today: dt.date):
+    try:
+        with open(CANDLE_CACHE, "rb") as f:
+            saved = pickle.load(f)
+        if saved.get("date") == today:
+            _day_cache.update({(today, tok): df for tok, df in saved["data"].items()})
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"candle cache not loaded: {e!r}")
+
+
+def save_day_cache():
+    """Writes today's downloaded daily candles to disk (called after each scan)."""
+    with _day_lock:
+        items = list(_day_cache.items())
+    if not items:
+        return
+    day = items[0][0][0]
+    try:
+        tmp = CANDLE_CACHE + ".tmp"
+        with open(tmp, "wb") as f:
+            pickle.dump({"date": day, "data": {tok: df for (d, tok), df in items if d == day}}, f)
+        os.replace(tmp, CANDLE_CACHE)
+    except Exception as e:
+        print(f"candle cache not saved: {e!r}")
 
 
 def history(k, instrument_token: int, interval: str, candles: int, now: dt.datetime) -> pd.DataFrame:
@@ -50,10 +103,16 @@ def history(k, instrument_token: int, interval: str, candles: int, now: dt.datet
     Daily candles are fetched once per stock per day and reused (Swing and Penny share them)."""
     if interval == "day":
         key = (now.date(), instrument_token)
-        if key not in _day_cache:
+        with _day_lock:
             if _day_cache and next(iter(_day_cache))[0] != now.date():
                 _day_cache.clear()
-            _day_cache[key] = _fetch(k, instrument_token, interval, max(candles, DAY_FETCH), now)
+            if not _day_cache:
+                _load_day_cache(now.date())
+            have = key in _day_cache
+        if not have:
+            df = _fetch(k, instrument_token, interval, max(candles, DAY_FETCH), now)
+            with _day_lock:
+                _day_cache[key] = df
         return _day_cache[key].tail(candles)
     return _fetch(k, instrument_token, interval, candles, now)
 
@@ -64,7 +123,16 @@ def _fetch(k, instrument_token: int, interval: str, candles: int, now: dt.dateti
     else:
         mins = INTERVAL_MINUTES[interval]
         start = now.date() - dt.timedelta(days=max(5, int(candles * mins / 375 * 1.6) + 5))
-    df = pd.DataFrame(k.historical_data(instrument_token, start, now.replace(tzinfo=None), interval))
+    for attempt in range(3):
+        _history_limit.wait()
+        try:
+            data = k.historical_data(instrument_token, start, now.replace(tzinfo=None), interval)
+            break
+        except kite_errors.NetworkException as e:        # "Too many requests": wait and try again
+            if attempt == 2 or "too many" not in str(e).lower():
+                raise
+            time.sleep(1.0 + attempt)
+    df = pd.DataFrame(data)
     if df.empty:
         return df
     df = df[["date", "open", "high", "low", "close", "volume"]]

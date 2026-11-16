@@ -35,8 +35,10 @@ THE 8 ALGOS
     See them in Kite -> Orders -> GTT. The stop-loss leg sells at a limit 2% below its trigger so it
     fills in a fast fall. MJVS records the sell at its next check; Positions shows each GTT's status.
     If MJVS sells first (drawdown limit), it deletes the GTT, so shares are never sold twice.
-  A full scan of about 2,000 stocks takes 10-15 minutes (Kite allows ~3 chart downloads a
-  second); Swing and Penny share the downloaded data. Every BUY row has a Buy button that opens
+  SCAN SPEED: charts download in parallel at Kite's limit (about 3 a second), so the first full
+  scan of ~2,000 stocks takes about 11-12 minutes; Penny only downloads stocks under Rs 100, so it is
+  quicker. Downloaded charts are saved to disk for the day (candles-today.pkl in the data folder):
+  a second scan the same day, or a scan after a restart, takes seconds. Swing and Penny share them. Every BUY row has a Buy button that opens
   a Kite-style order window (Paper or Live, Market or Limit, CNC).
   - NIFTY Future swing: 1-hour candles of the NIFTY future (never options), 15-20 day trades.
     Long: target 8%; stop loss 5% or close < 50 SMA / RSI < 40 / %b < 50 -> then goes SHORT.
