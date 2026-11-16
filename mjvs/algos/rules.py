@@ -78,14 +78,19 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def to_weekly(df: pd.DataFrame, today) -> pd.DataFrame:
-    """Daily candles -> weekly candles (weeks end Friday). The running week is dropped."""
+def to_weekly(df: pd.DataFrame, today, include_running: bool = False) -> pd.DataFrame:
+    """Daily candles -> weekly candles (weeks Monday-Friday, labelled by their Friday).
+    include_running=False: the running week is dropped (only completed weeks).
+    include_running=True: the running week is kept, built from the completed days so far
+    (Monday up to the last trading day's close). Daily candles never include today's unfinished day."""
     d = df.copy()
     d.index = pd.to_datetime(d.index)
     if d.index.tz is not None:
         d.index = d.index.tz_localize(None)
     w = d.resample("W-FRI").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
     w = w.dropna(subset=["close"])
+    if include_running:
+        return w
     return w[w.index.date < today]      # a week ending today or later is not complete yet
 
 

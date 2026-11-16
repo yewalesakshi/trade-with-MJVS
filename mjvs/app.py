@@ -329,10 +329,19 @@ def algo_start(algo_id: str, b: Settings, mid: int = Depends(current_member_id))
         raise HTTPException(400, "Pick what to trade from the list")
     if not b.paper and not store.allow_live():
         raise HTTPException(400, "Live trading is switched off. The admin can switch it on: Admin page -> Live trading.")
+    warning = ""
     with Session(engine) as s:
         m = s.get(Member, mid)
         if not m.kite_token:
             raise HTTPException(400, "Connect Kite first")
+        # Money check against the member's Zerodha account: Live is refused, Paper only warned.
+        cash_now = kite_cash(s, m)
+        if cash_now is not None and cash_now < b.amount:
+            msg = (f"Amount is less in your Zerodha account: available Rs {cash_now:,.0f}, "
+                   f"but you entered Rs {b.amount:,.0f}.")
+            if not b.paper:
+                raise HTTPException(400, msg + " Lower the amount or add money in Kite.")
+            warning = msg + " Paper mode started anyway (no real money)."
         sub = s.query(Subscription).filter_by(member_id=mid, algo_id=algo_id).first()
         if not sub:
             sub = Subscription(member_id=mid, algo_id=algo_id, last_signal_id=0)
@@ -355,7 +364,25 @@ def algo_start(algo_id: str, b: Settings, mid: int = Depends(current_member_id))
                             + ("Runs once a day" if algo.once_per_day else f"Checks every {algo.run_every} min")
                             + f" between {algo.window[0]:%H:%M} and {algo.window[1]:%H:%M} on market days.")
         s.commit()
-    return {"running": True}
+    return {"running": True, "warning": warning}
+
+
+def kite_cash(s: Session, m: Member) -> float | None:
+    """Available cash in Zerodha, or None when it cannot be read (the check is then skipped)."""
+    if not m.kite_token or not eng.token_fresh(m):
+        return None
+    try:
+        return broker.available_cash(broker.client(m.kite_token))
+    except broker.TokenError:
+        return None
+    except Exception:
+        return None
+
+
+@app.get("/kite/funds")
+def kite_funds(mid: int = Depends(current_member_id)):
+    with Session(engine) as s:
+        return {"cash": kite_cash(s, s.get(Member, mid))}
 
 
 @app.post("/algos/{algo_id}/stop")

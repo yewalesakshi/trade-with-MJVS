@@ -104,6 +104,8 @@ def scan(algo, k, symbols: list[str], now: dt.datetime, progress=None) -> list[d
         if not q:
             rows.append({**base, "signal": "ERROR", "error": "Symbol not found on Kite"})
             continue
+        if algo.max_price and float(q.get("last_price") or 0) >= algo.max_price:
+            continue             # e.g. Penny stock: only stocks under Rs 100
         try:
             df = broker.history(k, q["instrument_token"], algo.interval, algo.candles, now)
             if len(df) < algo.candles - 30:
@@ -268,6 +270,10 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
     by_trade = {r["trade_symbol"]: r for r in rows or []}
     for sym, p in list(held.items()):
         reason = algo.exit_reason(p, prices.get(sym), now, by_trade.get(sym))
+        ltp = prices.get(sym)
+        if not reason and algo.sl_from_drawdown and ltp and p.avg and p.qty > 0 and \
+                ltp <= p.avg * (1 - sub.drawdown_pct / 100):
+            reason = f"stop loss {sub.drawdown_pct:g}%"
         if not reason and algo.require_tradingview and p.entry_at:
             since = p.entry_at.replace(tzinfo=None)
             if sigmod.norm(sym) in sigmod.tradingview_sells(s, algo.id, since):
@@ -292,8 +298,11 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
         buy_prices = broker.ltp_many(k, [sym for sym, _ in picks])
         for sym, note in picks:
             price = buy_prices.get(sym)
-            units = algo.quantity(price, min(slot_cash, cash)) if price else 0
             name = sym.split(":")[1]
+            if price and algo.max_price and price >= algo.max_price:
+                notes.append(f"{name}: price {price:.2f} is not under Rs {algo.max_price}, not bought")
+                continue
+            units = algo.quantity(price, min(slot_cash, cash)) if price else 0
             if units < 1:
                 notes.append(f"{name}: not enough cash for 1 unit" if price else f"{name}: no price on Kite")
                 continue

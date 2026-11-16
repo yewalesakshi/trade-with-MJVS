@@ -27,7 +27,9 @@ THE 8 ALGOS
     BUY when all three first become true together: close crosses above the 50 SMA,
     RSI(8) above 60, Bollinger %b(50, SD 1) above 51.
   - Swing: daily candles, scans ALL NSE stocks. Target 8%, stop loss 5%.
-  - Penny stock: same rule on WEEKLY candles, scans ALL NSE stocks. Target 8%, stop loss 5%.
+  - Penny stock: same rule on WEEKLY candles (Monday-Friday; this week included up to the last
+    trading day). Only stocks UNDER Rs 100. Buys the top 5 BUY stocks with the money split equally
+    (Rs 1,000 -> Rs 200 each). Target 8%; stop loss = your drawdown limit (default 5%).
   A full scan of about 2,000 stocks takes 10-15 minutes (Kite allows ~3 chart downloads a
   second); Swing and Penny share the downloaded data. Every BUY row has a Buy button that opens
   a Kite-style order window (Paper or Live, Market or Limit, CNC).
@@ -63,6 +65,10 @@ MANUAL TRADING (next to Algo trading)
   NRML/MIS for futures and options (quantity in lots). Paper or Live (Live needs the
   Admin switch on). Live orders work even on the free "Personal" Kite plan; prices need "Connect". "Your Zerodha account today" lists every order, position and holding in your
   Zerodha account from ANY app (MJVS, Kite app, Streak ...) and can cancel open orders.
+
+ZERODHA MONEY CHECK
+  The algo settings show the cash available in your Zerodha account. If the amount you enter is
+  more than that, a red warning shows: Live mode cannot start, Paper mode still can.
 
 LIVE ORDERS NEED A WHITELISTED STATIC IP (Zerodha rule since 1 April 2026)
   If an order is refused with "IP ... is not allowed" or "Insufficient permission": on

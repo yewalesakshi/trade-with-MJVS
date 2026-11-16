@@ -79,6 +79,19 @@ def _fetch(k, instrument_token: int, interval: str, candles: int, now: dt.dateti
     return df.set_index("date").tail(candles)
 
 
+def available_cash(k) -> float | None:
+    """Money free to trade in the member's Zerodha equity account (Kite 'margins'), or None
+    if Kite does not answer. Shares and F&O use the same equity balance at Zerodha."""
+    try:
+        eq = k.margins("equity")
+        return float(eq.get("net", eq.get("available", {}).get("live_balance", 0)))
+    except TokenError:
+        raise
+    except Exception as e:
+        print(f"available_cash failed: {e!r}")
+        return None
+
+
 def market_open_today(k, today: dt.date) -> bool:
     """On a holiday NIFTY's last tick is from an earlier day. Unknown -> assume open."""
     try:

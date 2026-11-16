@@ -3,10 +3,15 @@ PENNY STOCK — READY. Same rule as Swing, on WEEKLY candles. (Rule: mjvs/algos/
 
 BUY on the weekly candle where all three first become true together:
   1. close crosses above the 50 SMA        2. RSI(8) above 60        3. Bollinger %b(50, SD 1) above 51
-EXIT: target 8% above the buy price, stop loss 5% below it (checked every 15 minutes).
-Weekly candles are built from Kite's daily candles (weeks end Friday); the running week is
-ignored until it is complete. A BUY stays valid for that week; each stock is bought once.
-Scans ALL NSE stocks (shares the daily data Swing downloads). Small stocks can be illiquid.
+ONLY stocks under Rs 100 (checked on the live price before scanning and again before buying).
+WEEKS: Monday to Friday. Each weekly candle is built from Kite's daily candles:
+  open = first trading day's open, high/low = the week's high/low, close = last trading day's close.
+  This week's candle is INCLUDED, built from Monday up to the last completed trading day,
+  so a signal can appear mid-week (the candle can still change until Friday's close).
+MONEY: the top 5 BUY stocks (strongest RSI first), money split equally (e.g. Rs 1,000 -> Rs 200 each).
+EXIT: target 8% above the buy price; stop loss = the member's drawdown limit (default 5%) below it.
+  The whole algo also stops if it falls that % from its peak. Checked every 15 minutes.
+Each stock is bought once a week. Scans ALL NSE stocks under Rs 100. Small stocks can be illiquid.
 """
 from . import rules
 from .base import Algo, read_watchlist
@@ -38,7 +43,13 @@ class Penny(Algo):
     run_every = 15
     reentry_days = 7                      # a weekly BUY is acted on once
     target_pct = 8
-    stop_loss_pct = 5
+    stop_loss_pct = None                  # the stop loss is the member's drawdown limit (below)
+    sl_from_drawdown = True               # stop loss % = drawdown slider (default 5%)
+    default_drawdown = 5
+    max_price = 100                       # only stocks under Rs 100
+    max_positions = 5                     # top 5 BUY stocks, money split equally
+    exits_note = ("Target 8% above the buy price. Stop loss = your drawdown limit (default 5%) below the buy price. "
+                  "The whole algo also stops if it falls that % from its peak.")
 
     def symbols(self, universe, kite=None):
         listed = read_watchlist(universe) if universe != "all" else []
@@ -47,7 +58,7 @@ class Penny(Algo):
         return all_stocks(kite) if kite else []
 
     def indicators(self, df):
-        weekly = rules.to_weekly(df, config.ist_today())
+        weekly = rules.to_weekly(df, config.ist_today(), include_running=True)
         if len(weekly) < rules.MA_LENGTH + 2:
             raise ValueError(f"Only {len(weekly)} weeks of history (needs about {rules.MA_LENGTH + 2})")
         return rules.add_indicators(weekly)
