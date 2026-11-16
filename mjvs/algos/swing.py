@@ -6,8 +6,9 @@ BUY on the daily candle where all three first become true together:
 Signals use the last completed trading day (checked from 9:20). Scans ALL NSE stocks, no price limit.
 MONEY: the top 5 BUY stocks (strongest RSI first), money split equally. A stock that costs more than
   one slot's money is skipped and the next BUY stock is bought instead, so the slots still fill.
-EXIT: target 8% above the buy price; stop loss = the member's drawdown limit (default 5%) below it.
-  The whole algo also stops if it falls that % from its peak. Checked every 15 minutes.
+EXIT: target 8% above the buy price; stop loss ALWAYS 5% below the buy price (fixed).
+  The drawdown limit is separate: it stops the whole algo if it falls that % from its peak.
+  Checked every 15 minutes.
 LIVE MODE: after each buy fills, a GTT OCO (target + stop loss) is created in Zerodha, which then
   sells by itself even if MJVS is off; MJVS records the sell at its next check (engine.sync_gtts).
 (Earlier strategy versions are kept in the legacy folder.)
@@ -36,12 +37,10 @@ class Swing(Algo):
     once_per_day = False      # entries from the daily scan; target / stop loss checked through the day
     run_every = 15
     target_pct = 8
-    stop_loss_pct = None                  # the stop loss is the member's drawdown limit (below)
-    sl_from_drawdown = True               # stop loss % = drawdown slider (default 5%)
-    default_drawdown = 5
+    stop_loss_pct = 5                     # fixed: always 5% below the buy price
     use_gtt = True                        # Live: target + stop loss also placed as a Zerodha GTT (OCO)
-    exits_note = ("Target 8% above the buy price. Stop loss = your drawdown limit (default 5%) below the buy price. "
-                  "The whole algo also stops if it falls that % from its peak. "
+    exits_note = ("Target 8% above the buy price. Stop loss always 5% below the buy price. "
+                  "The drawdown limit stops the whole algo if it falls that % from its peak. "
                   "LIVE: both exits are also placed in your Zerodha account as a GTT (OCO), so Zerodha sells "
                   "even if MJVS is off.")
 

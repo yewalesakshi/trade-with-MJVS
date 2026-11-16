@@ -27,8 +27,9 @@ THE 8 ALGOS
     BUY when all three first become true together: close crosses above the 50 SMA,
     RSI(8) above 60, Bollinger %b(50, SD 1) above 51.
   - Swing: daily candles, scans ALL NSE stocks. Target 8%, stop loss 5%.
-  - Swing now works like Penny stock: top 5 BUY stocks with the money split equally, stop loss =
-    your drawdown limit (default 5%), target 8%, and in LIVE mode a Zerodha GTT for both exits.
+  - Swing: top 5 BUY stocks with the money split equally, FIXED stop loss 5% below the buy price,
+    target 8%, and in LIVE mode a Zerodha GTT for both exits. The drawdown limit only stops the
+    whole algo.
     No price limit: a stock costing more than one slot's money is skipped for the next BUY stock.
   - Manual Buy window (Live): tick "Also create a GTT" to add a target % and stop loss % in Zerodha.
     The Trade page -> "Your Zerodha account" -> GTT tab lists all active GTTs.
