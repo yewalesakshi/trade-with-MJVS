@@ -296,3 +296,8 @@ code,.code{font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;backgr
 .fc-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px}
 .fc-legend i{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
 @media (max-width:640px){#fc-main{height:320px!important}}
+
+/* scanner: daily automatic scan time */
+.sc-auto{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:4px 0 8px;font-size:14px}
+.sc-auto-set{display:inline-flex;gap:8px;align-items:center}
+.sc-auto-set input{width:auto;padding:6px 8px}

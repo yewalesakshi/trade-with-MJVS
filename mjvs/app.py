@@ -448,7 +448,7 @@ def algo_scan(algo_id: str, b: ScanIn, mid: int = Depends(current_member_id)):
     with _jobs_lock:
         if _scan_jobs.get(key, {}).get("running"):
             return {"started": False, "job": _scan_jobs[key]}
-        _scan_jobs[key] = {"running": True, "done": 0, "total": 0, "step": "Getting the stock list from Kite", "error": ""}
+        _scan_jobs[key] = {"running": True, "done": 0, "total": 0, "step": "Getting the stock list from Kite", "error": "", "note": ""}
     threading.Thread(target=_run_scan_job, args=(algo, universe, key, enc, mid), daemon=True).start()
     return {"started": True, "job": _scan_jobs[key]}
 
@@ -469,7 +469,11 @@ def _run_scan_job(algo, universe: str, key: str, enc_token: str, mid: int):
         rows = eng.scan(algo, k, symbols, config.ist_now(), progress=lambda n, t: job.update(done=n, total=t))
         with Session(engine) as s:
             eng.save_scan(s, algo.id, universe, rows)
-        job.update(done=len(symbols), step="Done")
+        note = ""
+        if algo.manual_scan and algo.auto_trade:
+            job.update(step="Placing orders for running algos")
+            note = eng.run_after_scan(algo, universe, rows)
+        job.update(done=len(symbols), step="Done", note=note)
     except broker.TokenError:
         with Session(engine) as s:
             m = s.get(Member, mid)
@@ -492,7 +496,9 @@ def algo_signals(algo_id: str, universe: str = "", mid: int = Depends(current_me
         st = s.get(AlgoState, f"{algo_id}:{universe or algo.default_universe}")
         alerts = s.query(Signal).filter_by(algo_id=algo_id).order_by(Signal.id.desc()).limit(100).all()
         return {"scan": json.loads(st.scan) if st else [], "scan_at": iso(st.scan_at) if st else None,
+                "scan_info": scan_info(algo, st.scan_at if st else None),
                 "job": _scan_jobs.get(f"{algo_id}:{universe or algo.default_universe}"),
+                "scan_time": store.scan_time(), "daily_scan_last": eng._sched_scan.get("last", ""),
                 "alerts": [{"symbol": a.symbol, "price": a.price, "source": a.source, "action": a.action,
                             "note": a.note, "at": iso(a.at)} for a in alerts],
                 "suggestions": [suggestion_view(x) for x in s.query(Suggestion).filter_by(algo_id=algo_id)
@@ -572,6 +578,23 @@ def futures_chart(mid: int = Depends(current_member_id)):
 
 
 CHART_CANDLES = 300          # about 2 months of 1-hour candles
+
+
+def scan_info(algo, scan_at) -> dict | None:
+    """Plain facts for the page: when the scan ran, which day's closing candles it used, which day
+    its BUY list is for, and whether it is still the current scan."""
+    if not scan_at or algo.interval != "day":
+        return None
+    at = eng.to_ist(scan_at)
+    used = broker.data_day(at)                       # last complete daily candle in this scan
+    now = config.ist_now()
+    after_close = at.weekday() < 5 and at.time() >= broker.MARKET_CLOSE
+    trade = at.date() if not after_close else at.date() + dt.timedelta(days=1)
+    while trade.weekday() >= 5:
+        trade += dt.timedelta(days=1)
+    return {"ran_at": iso(at), "candles_up_to": used.isoformat(), "for_day": trade.isoformat(),
+            "current": used == broker.data_day(now), "today": at.date() == now.date(),
+            "after_close": after_close}
 
 
 def suggestion_view(x: Suggestion, ltp=None) -> dict:
@@ -1013,6 +1036,18 @@ def public_ip() -> str:
 
 class LiveIn(BaseModel):
     on: bool
+
+
+class ScanTimeIn(BaseModel):
+    time: str = Field(pattern=r"^(off|([01]\d|2[0-3]):[0-5]\d)$")    # "HH:MM" (IST) or "off"
+
+
+@app.put("/admin/scan-time")
+def admin_scan_time(b: ScanTimeIn, mid: int = Depends(need_admin)):
+    """Time of the automatic daily Swing / Penny scan (Mon-Fri), or "off"."""
+    store.put("scan_time", b.time)
+    eng._sched_scan["day"] = None          # a new time can run again today
+    return {"ok": True, "scan_time": store.scan_time()}
 
 
 @app.put("/admin/live")

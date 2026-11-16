@@ -41,9 +41,12 @@ THE 8 ALGOS
     See them in Kite -> Orders -> GTT. The stop-loss leg sells at a limit 2% below its trigger so it
     fills in a fast fall. MJVS records the sell at its next check; Positions shows each GTT's status.
     If MJVS sells first (drawdown limit), it deletes the GTT, so shares are never sold twice.
-  PRE-MARKET SCAN: press Connect Kite before 8:30 on trading days. From 8:30 the app downloads all
-  charts and scans Swing and Penny in the background, so by 9:15 everything is ready: the 9:20
-  runs and "Scan now" then take seconds. (If you connect later, it starts within 5 minutes, up to 9:15.)
+  SCANNING (Swing and Penny): the scanner runs (1) automatically once a day, Mon-Fri, at the time
+  set on the Scanner page (default 15:30; the admin can change it or switch it off), and (2) any time
+  you press "Scan now". After 15:30 today's candle counts as complete, so the 15:30 scan's BUY list is
+  bought at 9:20 the next trading day (no new download). A scan that finishes between 09:20 and 15:10
+  is bought at once by running algos. Target / stop loss and the Zerodha GTTs keep working all day.
+  Someone must press Connect Kite that day, or the daily scan waits until they do.
   SCAN SPEED: charts download in parallel at Kite's limit (about 3 a second), so the first full
   scan of ~2,000 stocks takes about 11-12 minutes; Penny only downloads stocks under Rs 100, so it is
   quicker. Downloaded charts are saved to disk for the day (candles-today.pkl in the data folder):

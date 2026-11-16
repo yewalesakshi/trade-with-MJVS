@@ -626,9 +626,9 @@ function appAlgo(id) {
   var status = '<div class="card"><div class="card-head"><h3>Account</h3></div><div id="acct"></div><div class="lbl" style="margin-top:14px">Latest from the algo</div><div class="logbox" id="lastmsg">Not started yet.</div>' +
     '<div class="lbl" style="margin-top:16px">How this algo runs</div><div class="row"><span>Signals</span><b>' + sourceLabel(a) + (a.source === "scan" ? " · " + esc(a.candle_label || ({ day: "daily", "60minute": "1-hour", "30minute": "30-minute", "15minute": "15-minute", "5minute": "5-minute", minute: "1-minute" }[a.interval] || a.interval)) + " candles" : "") + '</b></div><div class="row"><span>Runs</span><b>' + esc(runsText(a)) + '</b></div><div class="row"><span>Exits</span><b>' + esc(exitsText(a)) + '</b></div><div class="row"><span>Order type</span><b>Market · ' + esc(a.product) + "</b></div></div>";
   var sig = '<div class="card"><div class="card-head"><div><h3>' + (a.source === "scan" ? "Scanner" : "Chartink alerts") + '</h3><p class="muted small">' +
-    (a.source === "scan" ? (uniKeys.length === 1 ? esc(a.universes[uniKeys[0]]) + " · " : "") + "Your rule on completed candles. BUY rows are bought into free slots, strongest first. Press Buy to buy one yourself." + (a.universes && a.universes.all ? " The first full scan of the day takes about 15 minutes (Zerodha allows about 3 charts a second). Connect Kite before 8:30 and it runs by itself before the market opens; after that, scans take seconds." : "") : "Stocks sent by this algo’s Chartink scanner. New alerts are bought at the next run.") + "</p></div>" +
+    (a.source === "scan" ? (uniKeys.length === 1 ? esc(a.universes[uniKeys[0]]) + " · " : "") + "Your rule on completed candles. BUY rows are bought into free slots, strongest first. Press Buy to buy one yourself." + (a.universes && a.universes.all ? (a.manual_scan ? " Scans run automatically once a day (time below) and whenever you press Scan now. After 15:30 today's candle counts as complete, so the daily scan's BUY list is bought at 9:20 next day; a Scan now between 09:20 and 15:10 is bought at once. The first scan for new candles takes about 15 minutes (Zerodha allows about 3 charts a second); after that, seconds." : " The first full scan of the day takes about 15 minutes (Zerodha allows about 3 charts a second).") : "") : "Stocks sent by this algo’s Chartink scanner. New alerts are bought at the next run.") + "</p></div>" +
     (a.source === "scan" && a.ready ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + (uniKeys.length > 1 ? '<select id="sc-uni" style="width:auto">' + uniKeys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === uni ? " selected" : "") + ">" + esc(a.universes[k]) + "</option>"; }).join("") + "</select>" : "") + '<button class="btn sm" type="button" id="sc-go">Scan now</button></div>' : "") +
-    '</div><p id="sc-msg" class="msg small" role="status"></p><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px"><p class="small muted" id="sc-at" style="margin:0"></p>' +
+    '</div>' + (a.manual_scan ? '<div class="sc-auto" id="sc-auto"></div>' : "") + '<p id="sc-msg" class="msg small" role="status"></p><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px"><p class="small muted" id="sc-at" style="margin:0"></p>' +
     (a.source === "scan" ? '<div class="seg" id="sc-f"><button type="button" data-v="">All</button><button type="button" data-v="BUY">BUY</button><button type="button" data-v="SELL">SELL</button><button type="button" data-v="HOLD">HOLD</button></div>' : "") + '</div><div id="sc"></div></div>';
   appLayout("algos", a.name, '<div class="crumb"><a href="#/app/algos">Algos</a> / ' + esc(a.name) + "</div>" +
     '<div class="algo-head"><div><h2>' + esc(a.name) + " " + stars(a.stars) + '</h2><div class="meta">' + statusBadge(a) + '<span class="badge">' + esc(a.holding) + '</span><span class="badge">' + sourceLabel(a) + "</span></div>" +
@@ -703,16 +703,31 @@ function appAlgo(id) {
       var j = x.ok && x.d.job;
       if (j && j.running) { if (b) b.disabled = true; say(m, true, jobText(j) + ". You can leave this page; the scan keeps going."); setTimeout(function () { watchScan(u); }, 2000); return; }
       if (b) b.disabled = false;
-      if (j && j.error) say(m, false, j.error); else { m.textContent = ""; toast("Scan finished"); }
+      if (j && j.error) say(m, false, j.error); else if (j && j.note) { say(m, true, j.note); toast(j.note); refresh(); } else { m.textContent = ""; toast("Scan finished"); }
       loadSignals(u);
     }).catch(function () { setTimeout(function () { watchScan(u); }, 4000); });
   }
 
   var scanRows = [], scanF = "BUY";
   on("sc-f", "click", function (e) { var b = e.target.closest("button"); if (!b) return; scanF = b.getAttribute("data-v"); drawScan(scanRows, null, true); });
+  var info = null;
+  function dayName(iso) { // "2026-11-23" -> "Mon, 23 Nov", with today / yesterday / tomorrow (Indian dates)
+    var ist = function (ms) { return new Date(ms).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); };
+    var now = Date.now(), day = 864e5;
+    var name = new Date(iso + "T12:00:00+05:30").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "numeric", month: "short" });
+    return iso === ist(now) ? "today (" + name + ")" : iso === ist(now - day) ? "yesterday (" + name + ")" : iso === ist(now + day) ? "tomorrow (" + name + ")" : name;
+  }
+  function scanLabel(at, i) {
+    if (!i) return "Last scan: " + when(at);
+    var tag = i.current ? '<span class="badge good">Current scan</span>' : '<span class="badge warn">Old scan: press Scan now</span>';
+    return tag + " <b>Scan ran " + (i.today ? "today" : dayName(String(i.ran_at).slice(0, 10))) + " at " +
+      new Date(i.ran_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }) + "</b>" +
+      " · uses closing candles up to <b>" + dayName(i.candles_up_to) + "</b>" +
+      " · BUY list for <b>" + dayName(i.for_day) + "</b>" + (i.after_close ? " (bought at 9:20)" : "");
+  }
   function drawScan(rows, at, keepAt) {
     scanRows = rows || [];
-    if (!keepAt) $("sc-at").textContent = at ? "Last scan: " + when(at) + " · " + scanRows.filter(function (r) { return r.signal === "BUY"; }).length + " BUY of " + scanRows.length : "";
+    if (!keepAt) $("sc-at").innerHTML = at ? scanLabel(at, info) + ' <span class="muted">· ' + scanRows.filter(function (r) { return r.signal === "BUY"; }).length + " BUY of " + scanRows.length + "</span>" : "No scan yet.";
     if ($("sc-f")) $("sc-f").querySelectorAll("button").forEach(function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-v") === scanF); });
     var cols = a.columns || [];
     var buyCol = a.group !== "fno";
@@ -728,8 +743,19 @@ function appAlgo(id) {
       return "<tr><td>" + when(x.at) + "</td><td><b>" + short(x.symbol) + "</b></td><td>" + (x.price == null ? "—" : px.format(x.price)) + "</td><td>" + ({ chartink: "Chartink", tradingview: "TradingView", test: "Test" }[x.source] || esc(x.source)) + (x.action === "SELL" ? ' <span class="sig SELL">SELL</span>' : "") + '</td><td class="wrap">' + esc(x.note) + "</td></tr>";
     }), "No alerts yet. Alerts arrive here from this algo’s Chartink scanner" + (a.require_tradingview ? " and TradingView strategy." : "."));
   }
+  function drawAuto(d) {
+    var el = $("sc-auto"); if (!el) return;
+    var t = d.scan_time || "", admin = DASH && DASH.is_admin;
+    el.innerHTML = '<span><b>Daily scan:</b> ' + (t ? t + " (Mon–Fri, automatic)" : "off") + "</span>" +
+      (admin ? '<span class="sc-auto-set"><input type="time" id="sc-time" value="' + esc(t || "15:30") + '"><button class="btn sm ghost" type="button" id="sc-tsave">Save time</button>' +
+        '<button class="btn sm quiet" type="button" id="sc-toff">' + (t ? "Turn off" : "Turn on") + "</button></span>" : "") +
+      (d.daily_scan_last ? '<span class="muted small">Last: ' + esc(d.daily_scan_last) + "</span>" : "");
+    function put(v) { api("/admin/scan-time", { method: "PUT", json: { time: v } }).then(function (x) { if (x.ok) { toast(x.d.scan_time ? "Daily scan at " + x.d.scan_time : "Daily scan switched off"); loadSignals(uni); } else toast(errText(x, "Could not save")); }); }
+    on("sc-tsave", "click", function () { var v = $("sc-time").value; if (/^\d\d:\d\d$/.test(v)) put(v); });
+    on("sc-toff", "click", function () { put(t ? "off" : ($("sc-time").value || "15:30")); });
+  }
   function loadSignals(u) {
-    api("/algos/" + id + "/signals?universe=" + encodeURIComponent(u || uni || "")).then(function (x) { if (!x.ok) return; if (a.source === "scan") drawScan(x.d.scan, x.d.scan_at); else drawAlerts(x.d.alerts);
+    api("/algos/" + id + "/signals?universe=" + encodeURIComponent(u || uni || "")).then(function (x) { if (!x.ok) return; drawAuto(x.d); if (a.source === "scan") { info = x.d.scan_info; drawScan(x.d.scan, x.d.scan_at); } else drawAlerts(x.d.alerts);
       if (x.d.job && x.d.job.running && $("sc-go") && !$("sc-go").disabled) watchScan(u || uni || "");
       if ($("sg")) $("sg").innerHTML = table(["Date", "Stock", "Price at match", "LTP now", "Scanner", "TradingView", ""], sugRows(x.d.suggestions, false), "No matches yet."); });
   }

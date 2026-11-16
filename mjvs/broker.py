@@ -63,6 +63,21 @@ def ltp_many(k, symbols) -> dict:
     return {s: float(data[s]["last_price"]) for s in symbols if s in data}
 
 
+MARKET_CLOSE = dt.time(15, 30)  # from now on today's daily candle counts as complete
+
+
+def data_day(now: dt.datetime) -> dt.date:
+    """The last trading session whose daily candle is complete: today after 15:30 (Mon-Fri), else the
+    previous weekday. Saved charts and scans are keyed by it, so a 15:30 scan is reused next morning."""
+    d = now.date()
+    if d.weekday() < 5 and now.time() >= MARKET_CLOSE:
+        return d
+    d -= dt.timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= dt.timedelta(days=1)
+    return d
+
+
 DAY_FETCH = 340                 # daily candles fetched per stock: enough for weekly (Penny) and daily (Swing)
 _day_cache: dict = {}           # (date, token) -> completed daily candles, shared by all algos for the day
 _day_lock = threading.Lock()
@@ -102,12 +117,12 @@ def history(k, instrument_token: int, interval: str, candles: int, now: dt.datet
     """Completed candles only: a candle still forming is dropped.
     Daily candles are fetched once per stock per day and reused (Swing and Penny share them)."""
     if interval == "day":
-        key = (now.date(), instrument_token)
+        key = (data_day(now), instrument_token)
         with _day_lock:
-            if _day_cache and next(iter(_day_cache))[0] != now.date():
+            if _day_cache and next(iter(_day_cache))[0] != key[0]:
                 _day_cache.clear()
             if not _day_cache:
-                _load_day_cache(now.date())
+                _load_day_cache(key[0])
             have = key in _day_cache
         if not have:
             df = _fetch(k, instrument_token, interval, max(candles, DAY_FETCH), now)
@@ -138,7 +153,7 @@ def _fetch(k, instrument_token: int, interval: str, candles: int, now: dt.dateti
     df = df[["date", "open", "high", "low", "close", "volume"]]
     stamps = pd.to_datetime(df["date"])
     if interval == "day":
-        df = df[stamps.dt.date < now.date()]
+        df = df[stamps.dt.date <= data_day(now)]     # today's candle only once the market has closed
     else:
         naive_now = pd.Timestamp(now.replace(tzinfo=None))
         if stamps.dt.tz is not None:

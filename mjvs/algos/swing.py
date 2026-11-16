@@ -38,6 +38,7 @@ class Swing(Algo):
     run_every = 15
     target_pct = 8
     stop_loss_pct = 5                     # fixed: always 5% below the buy price
+    manual_scan = True                    # scans only when "Scan now" is pressed; then trades at once
     use_gtt = True                        # Live: target + stop loss also placed as a Zerodha GTT (OCO)
     exits_note = ("Target 8% above the buy price. Stop loss always 5% below the buy price. "
                   "The drawdown limit stops the whole algo if it falls that % from its peak. "

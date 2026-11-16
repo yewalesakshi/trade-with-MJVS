@@ -451,6 +451,9 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
         ensure_gtts(s, k, sub, algo, notes)
 
     head = "Manual paper run" if manual else "Run"
+    if algo.manual_scan and not rows:
+        notes.append("No scan for the latest candles yet: press Scan now, or wait for the daily scan "
+                     "(target / stop loss are still checked)")
     if algo.source == "scan":
         c = {sig: sum(1 for r in rows or [] if r["signal"] == sig) for sig in ("BUY", "SELL", "ERROR")}
         head += f": scanned {len(rows or [])} ({c['BUY']} BUY, {c['SELL']} SELL" + (f", {c['ERROR']} errors" if c["ERROR"] else "") + ")"
@@ -508,6 +511,10 @@ def group_rows(s: Session, algo, universe: str, subs: list, now: dt.datetime, ch
                 return None, False
             if algo.source != "scan" or hasattr(algo, "custom_run"):
                 return None, True
+            if algo.manual_scan:          # only "Scan now" or the daily scheduled scan scans
+                st = s.get(AlgoState, f"{algo.id}:{universe}")
+                fresh = st and st.scan_at and broker.data_day(to_ist(st.scan_at)) == broker.data_day(now)
+                return (json.loads(st.scan or "[]") if fresh else []), True
             held_syms = []
             for other in subs:   # held symbols are always re-checked, even if dropped from the list
                 _, held = positions(s, other)
@@ -584,7 +591,7 @@ def daily_scans(s: Session, now: dt.datetime):
     if now.date() in _closed_days:
         return
     for algo in ALGOS.values():
-        if not (algo.ready and algo.suggest and algo.source == "scan"):
+        if not (algo.ready and algo.suggest and algo.source == "scan") or algo.manual_scan:
             continue
         if not algo.window[0] <= now.time() <= algo.window[1]:
             continue
@@ -615,58 +622,85 @@ def daily_scans(s: Session, now: dt.datetime):
                     break
 
 
-# ---------------------------------------------------------------- pre-market scan
-# The first full scan of the day downloads ~2,800 charts (Kite allows ~3 a second: about 15 min).
-# Doing it before the market opens means the 9:20 runs and "Scan now" use saved charts (seconds).
-PREMARKET_SCAN = (dt.time(8, 30), dt.time(9, 15))
-_premarket = {"day": None, "running": False}
+# ---------------------------------------------------------------- daily scheduled scan
+_sched_scan = {"day": None, "running": False, "last": ""}
 
 
-def premarket_scan(now: dt.datetime | None = None, wait: bool = False):
-    """Every 5 minutes from 8:30 to 9:15 (Mon-Fri): once a member has connected Kite today, scan the
-    daily-candle algos (Swing, then Penny, which reuses the same charts) in the background."""
+def scheduled_scan(now: dt.datetime | None = None, wait: bool = False):
+    """Called every minute. On weekdays at the time set on the Scanner page (default 15:30), scans
+    Swing and Penny once in the background with any member's Kite login of today."""
+    from .settings_store import scan_time
     now = now or config.ist_now()
-    if now.weekday() >= 5 or not PREMARKET_SCAN[0] <= now.time() < PREMARKET_SCAN[1]:
+    t = scan_time()
+    if not t or now.weekday() >= 5:
         return
-    if _premarket["day"] == now.date() or _premarket["running"]:
+    hh, mm = (int(x) for x in t.split(":"))
+    if now.time() < dt.time(hh, mm) or _sched_scan["day"] == now.date() or _sched_scan["running"]:
         return
-    _premarket["running"] = True
-    t = threading.Thread(target=_premarket_run, args=(now,), daemon=True)
-    t.start()
+    _sched_scan["running"] = True
+    th = threading.Thread(target=_scheduled_run, args=(now,), daemon=True)
+    th.start()
     if wait:
-        t.join()
+        th.join()
 
 
-def _premarket_run(now: dt.datetime):
+def _scheduled_run(now: dt.datetime):
     try:
         with Session(db_engine) as s:
             from .settings_store import is_admin
             members = [m for m in s.query(Member).filter(Member.kite_token.isnot(None)).all() if token_fresh(m)]
             if not members:
-                return                        # nobody connected yet: tried again in 5 minutes
+                _sched_scan["last"] = f"{now:%d %b %H:%M}: skipped, nobody connected Kite today"
+                return                       # tried again next minute, until someone connects
             members.sort(key=lambda m: not is_admin(s, m))
-            algos = [a for a in ALGOS.values() if a.ready and a.source == "scan" and a.interval == "day"]
+            k = broker.client(members[0].kite_token)
+            if not broker.market_open_today(k, now.date()):
+                _sched_scan.update(day=now.date(), last=f"{now:%d %b}: market closed, no scan")
+                return
+            algos = [a for a in ALGOS.values() if a.ready and a.manual_scan]
             algos.sort(key=lambda a: a.max_price is not None)      # the full list first (Swing)
             for algo in algos:
                 for uni in (algo.universes or {"": ""}):
                     for m in members:
                         try:
                             k = broker.client(m.kite_token)
-                            save_scan(s, algo.id, uni, scan(algo, k, algo_symbols(algo, uni, k), now))
+                            rows = scan(algo, k, algo_symbols(algo, uni, k), now)
+                            save_scan(s, algo.id, uni, rows)
+                            if algo.auto_trade:
+                                run_after_scan(algo, uni, rows, now)
                             break
                         except broker.TokenError:
                             m.kite_token = None
                             s.commit()
-                        except broker.PermissionError_:
-                            print("pre-market scan: " + broker.NO_MARKET_DATA)
-                            _premarket["day"] = now.date()
-                            return
-            _premarket["day"] = now.date()
-            print(f"pre-market scan done at {config.ist_now():%H:%M}")
+            _sched_scan.update(day=now.date(), last=f"{now:%d %b %H:%M}: daily scan done ({config.ist_now():%H:%M})")
+    except broker.PermissionError_:
+        _sched_scan.update(day=now.date(), last=broker.NO_MARKET_DATA)
     except Exception as e:
-        print(f"pre-market scan failed: {e!r}")
+        _sched_scan["last"] = f"{now:%d %b %H:%M}: daily scan failed: {str(e)[:120]}"
+        print(f"scheduled scan failed: {e!r}")
     finally:
-        _premarket["running"] = False
+        _sched_scan["running"] = False
+
+
+def run_after_scan(algo, universe: str, rows: list[dict], now: dt.datetime | None = None) -> str:
+    """After a member's "Scan now": every running subscription of this algo trades from the new scan
+    at once (inside the algo's hours on a market day). Returns a short note for the page."""
+    now = now or config.ist_now()
+    if not algo.window[0] <= now.time() <= algo.window[1] or now.weekday() >= 5:
+        return (f"Scan done. Outside trading hours ({algo.window[0]:%H:%M}–{algo.window[1]:%H:%M}, Mon–Fri): "
+                "no orders now. Scan again during those hours to trade.")
+    n = 0
+    with Session(db_engine) as s:
+        subs = [x for x in s.query(Subscription).filter_by(algo_id=algo.id, running=True).all()
+                if (x.universe or algo.default_universe) == universe and token_fresh(s.get(Member, x.member_id))]
+        if subs:
+            m = s.get(Member, subs[0].member_id)
+            if not broker.market_open_today(broker.client(m.kite_token), now.date()):
+                return "Scan done. The market is closed today: no orders."
+        for sub in subs:
+            guarded(s, sub, lambda sub=sub: run_sub(s, algo, sub, rows, now))
+            n += 1
+    return f"Scan done. {n} running algo(s) traded from it now." if n else "Scan done. Start the algo to trade from it."
 
 
 def run_now(s: Session, sub: Subscription):
@@ -685,8 +719,8 @@ def start_scheduler():
     sched.add_job(tick, "cron", day_of_week="mon-fri", hour="9-15", minute="*",
                   max_instances=1, coalesce=True)
     from .db import backup_sqlite
-    sched.add_job(premarket_scan, "cron", day_of_week="mon-fri", hour="8-9", minute="*/5",
-                  max_instances=1, coalesce=True)                 # charts downloaded before 9:15
+    sched.add_job(scheduled_scan, "cron", day_of_week="mon-fri", hour="*", minute="*",
+                  max_instances=1, coalesce=True)                 # daily scan at the time set (default 15:30)
     sched.add_job(backup_sqlite, "cron", hour=18, minute=5)    # daily database backup
     try:
         backup_sqlite()                                         # and one at every start

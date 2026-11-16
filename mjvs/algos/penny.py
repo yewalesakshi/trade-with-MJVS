@@ -51,6 +51,7 @@ class Penny(Algo):
     default_drawdown = 5
     max_price = 100                       # only stocks under Rs 100
     max_positions = 5                     # top 5 BUY stocks, money split equally
+    manual_scan = True                    # scans only when "Scan now" is pressed; then trades at once
     use_gtt = True                        # Live: target + stop loss also placed as a Zerodha GTT (OCO)
     exits_note = ("Target 8% above the buy price. Stop loss = your drawdown limit (default 5%) below the buy price. "
                   "The whole algo also stops if it falls that % from its peak. "
@@ -64,7 +65,7 @@ class Penny(Algo):
         return all_stocks(kite) if kite else []
 
     def indicators(self, df):
-        weekly = rules.to_weekly(df, config.ist_today(), include_running=True)
+        weekly = rules.to_weekly(df, config.ist_today(), include_running=True)   # up to the last complete day
         if len(weekly) < rules.MA_LENGTH + 2:
             raise ValueError(f"Only {len(weekly)} weeks of history (needs about {rules.MA_LENGTH + 2})")
         return rules.add_indicators(weekly)

@@ -60,6 +60,12 @@ def allow_live() -> bool:
     return v == "1" if v in ("0", "1") else config.ALLOW_LIVE
 
 
+def scan_time() -> str:
+    """Daily automatic scan time for Swing / Penny, "HH:MM" (IST, Mon-Fri), or "" when switched off."""
+    v = _get("scan_time")
+    return "" if v == "off" else (v or "15:30")
+
+
 def redirect_url() -> str:
     return f"{config.BACKEND_URL}/kite/callback"
 
