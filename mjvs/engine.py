@@ -450,6 +450,14 @@ def entry_candidates(s: Session, algo, sub: Subscription, rows: list[dict] | Non
             sub.last_signal_id = latest[0]
         return [(algo.order_symbol(sig.symbol), f"{sig.source} alert {sig.note}".strip()) for sig in new]
     cols = algo.columns[:2]
+    # strongest signal first: highest value of the first indicator column (RSI)
+    first = algo.columns[0][0] if algo.columns else None
+    def strength(r):
+        try:
+            return -float(r.get(first) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    rows = sorted((r for r in rows or [] if r["signal"] == "BUY"), key=strength if first else (lambda r: 0))
     return [(r["trade_symbol"], "BUY signal" + (" (" + ", ".join(f"{lbl} {r.get(key)}" for key, lbl in cols) + ")" if cols else ""))
             for r in rows or [] if r["signal"] == "BUY"]
 
@@ -522,7 +530,8 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
                 held.pop(sym)
 
     # 3. New buys. max_positions = how many NEW stocks to buy per day (stocks already held do not
-    #    count; Zerodha has no such limit). 0 = No limit: every BUY stock with a fixed amount each.
+    #    count; Zerodha has no such limit), each for Money ÷ max_positions, strongest signal (RSI) first.
+    #    0 = No limit: every BUY stock with a fixed amount each.
     cands = entry_candidates(s, algo, sub, rows, today)
     if algo.can_enter(now) and algo.auto_trade:
         unlimited = sub.max_positions == 0
@@ -541,9 +550,13 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
                 notes.append("Zerodha cash could not be read, so no new buy this run")
             else:
                 cash = min(cash, kite_cash)
-        # money per new stock: the fixed amount (No limit), or the FREE money split equally between
-        # today's remaining new stocks (money already in held stocks is not counted twice)
-        slot_cash = (sub.per_stock or sub.amount) if unlimited else max(cash, 0) / max(slots, 1)
+        # money per new stock (fixed slot): Money for this algo ÷ number of stocks, e.g. 500 ÷ 5 = 100.
+        # Each stock is bought for at most this amount; a stock whose 1 share costs more is skipped.
+        # If fewer BUY stocks are found, the rest of the money simply stays free. No limit = fixed amount.
+        slot_cash = (sub.per_stock or sub.amount) if unlimited else sub.amount / max(sub.max_positions, 1)
+        if slots > 0 and cands and cash < slot_cash:
+            notes.append(f"Free money Rs {max(cash, 0):,.0f} is less than one stock's amount Rs {slot_cash:,.0f} "
+                         "(the rest is in held stocks); raise 'Money for this algo' to buy more")
         picks, seen = [], set(held) | bought_recently(s, sub, algo.reentry_days, now)
         for sym, note in cands:
             if sym not in seen:

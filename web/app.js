@@ -620,7 +620,7 @@ function appAlgo(id) {
     '<div class="field" id="s-maxw"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><label for="s-max" style="margin:0">Stocks to buy per day</label>' +
       '<label style="display:flex;gap:6px;align-items:center;font-weight:600;margin:0"><input type="checkbox" id="s-nolim" style="width:auto"' + (s0 && s0.max_positions === 0 ? " checked" : "") + '> No limit</label></div>' +
       '<input id="s-max" type="number" min="1" max="100" value="' + ((s0 && s0.max_positions) || a.max_positions) + '">' +
-      '<small id="s-maxh">New stocks bought from the scan each day. Stocks you already hold do not count. Money per stock = money for this algo ÷ this number.</small>' +
+      '<small id="s-maxh">Money per stock = money for this algo ÷ this number (e.g. ₹500 ÷ 5 = ₹100). Each stock is bought for at most that amount, strongest signal first; a stock costing more is skipped. If fewer stocks are found, the rest stays free. Stocks you already hold do not count.</small>' +
       '<div id="s-perw" hidden><label for="s-per" style="margin-top:8px">Amount per stock</label><div class="amt"><span>₹</span><input id="s-per" inputmode="numeric" value="' + Number((s0 && s0.per_stock) || 200).toLocaleString("en-IN") + '"></div>' +
       '<small>Buys every BUY stock from the scan with this amount each, until the money for this algo is used up.</small></div></div>' +
     '<div class="field"><div class="lbl">Mode</div><div class="seg" id="s-mode"><button type="button" data-v="paper">Paper (no real orders)</button><button type="button" data-v="live">Live</button></div>' +
@@ -669,7 +669,7 @@ function appAlgo(id) {
     var el = $("s-cash"); if (!el) return;
     var n = $("s-max") ? (+$("s-max").value || a.max_positions) : a.max_positions;
     var nl = $("s-nolim") && $("s-nolim").checked;
-    if ($("s-each")) $("s-each").textContent = a.group === "fno" || a.max_price || !amt() || nl ? "" : " Each stock gets about " + money.format(amt() / n) + " (" + money.format(amt()) + " ÷ " + n + ").";
+    if ($("s-each")) $("s-each").textContent = a.group === "fno" || !amt() || nl ? "" : " Each stock gets about " + money.format(amt() / n) + " (" + money.format(amt()) + " ÷ " + n + ").";
     if (kiteCash == null) { el.innerHTML = ""; return; }
     el.innerHTML = amt() > kiteCash
       ? '<div class="note" role="alert" style="background:var(--bad-soft);color:var(--bad)"><b>Amount is less in your Zerodha account.</b> Available: ' + money.format(kiteCash) + ", you entered " + money.format(amt()) + ". " + (paper ? "Paper mode can still start; Live needs the full amount." : "Live cannot start: lower the amount or add money in Kite.") + "</div>"
