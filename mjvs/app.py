@@ -432,6 +432,8 @@ def algo_start(algo_id: str, b: Settings, mid: int = Depends(current_member_id))
         sub.last_message = ("Started in " + ("paper mode: no real orders. " if sub.paper else "LIVE mode: real orders. ")
                             + ("Runs once a day" if algo.once_per_day else f"Checks every {algo.run_every} min")
                             + f" between {algo.window[0]:%H:%M} and {algo.window[1]:%H:%M} on market days.")
+        if algo.scan_buys:
+            sub.last_scan_used = ""        # every Start buys from the latest scan, even if it was used before
         s.commit()
         if algo.scan_buys:
             start_scan_buys(s, algo, m, sub, universe)
