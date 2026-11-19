@@ -49,7 +49,8 @@ class Subscription(Base):
     algo_id: Mapped[str] = mapped_column(String)
     amount: Mapped[float] = mapped_column(Float, default=0)
     drawdown_pct: Mapped[float] = mapped_column(Float, default=10)
-    max_positions: Mapped[int] = mapped_column(Integer, default=5)
+    max_positions: Mapped[int] = mapped_column(Integer, default=5)     # 0 = no limit (fixed amount per stock)
+    per_stock: Mapped[float] = mapped_column(Float, default=0.0)       # money per stock when there is no limit
     universe: Mapped[str] = mapped_column(String, default="")
     paper: Mapped[bool] = mapped_column(Boolean, default=True)
     running: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -157,7 +158,7 @@ class Feedback(Base):
 # create_all() never adds columns to existing tables, so older mjvs.db files are patched here.
 NEW_COLUMNS = {
     "members": {"kite_token_date": "DATE"},
-    "subscriptions": {"last_suggestion_id": "INTEGER DEFAULT 0", "state": "TEXT DEFAULT ''"},
+    "subscriptions": {"last_suggestion_id": "INTEGER DEFAULT 0", "state": "TEXT DEFAULT ''", "per_stock": "FLOAT DEFAULT 0"},
     "signals": {"action": "VARCHAR DEFAULT 'BUY'"},
     "feedback": {"topic": "VARCHAR DEFAULT ''", "name": "VARCHAR DEFAULT ''", "contact": "VARCHAR DEFAULT ''"},
     "trades": {"algo_id": "VARCHAR DEFAULT 'swing'", "mode": "VARCHAR DEFAULT 'live'",

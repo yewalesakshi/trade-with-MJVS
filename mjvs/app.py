@@ -319,7 +319,7 @@ def sub_view(s, sub: Subscription, prices: dict) -> dict:
     if getattr(ALGOS.get(sub.algo_id), "group", "") == "fno":
         cash = value          # futures: money = amount + profit/loss (no shares bought with cash)
     return {"algo_id": sub.algo_id, "amount": sub.amount, "drawdown_pct": sub.drawdown_pct,
-            "max_positions": sub.max_positions, "universe": sub.universe, "paper": sub.paper,
+            "max_positions": sub.max_positions, "per_stock": sub.per_stock or 0, "universe": sub.universe, "paper": sub.paper,
             "running": sub.running, "peak": round(sub.peak_value or 0, 2), "cash": round(cash, 2),
             "value": round(value, 2), "pnl": round(value - sub.amount, 2),
             "last_run_at": iso(sub.last_run_at), "last_message": sub.last_message, "positions": pos}
@@ -354,7 +354,8 @@ def dashboard(mid: int = Depends(current_member_id)):
 class Settings(BaseModel):
     amount: float = Field(gt=0)
     drawdown_pct: float = Field(ge=5, le=15)
-    max_positions: int = Field(default=5, ge=1, le=20)
+    max_positions: int = Field(default=5, ge=0, le=100)   # 0 = no limit
+    per_stock: float = Field(default=0, ge=0)              # money per stock when max_positions is 0
     universe: str = ""
     paper: bool = True
 
@@ -393,7 +394,14 @@ def algo_start(algo_id: str, b: Settings, mid: int = Depends(current_member_id))
             sub = Subscription(member_id=mid, algo_id=algo_id, last_signal_id=0)
             s.add(sub)
         sub.amount, sub.drawdown_pct, sub.paper, sub.universe = b.amount, b.drawdown_pct, b.paper, universe
-        sub.max_positions = b.max_positions
+        if b.max_positions == 0:
+            if algo.group == "fno":
+                raise HTTPException(400, "No limit is for share algos only")
+            if b.per_stock <= 0:
+                raise HTTPException(400, "With No limit, enter the amount per stock")
+            if b.per_stock > b.amount:
+                raise HTTPException(400, "The amount per stock cannot be more than the money for this algo")
+        sub.max_positions, sub.per_stock = b.max_positions, (b.per_stock if b.max_positions == 0 else 0)
         # Drawdown counts from today's value, so past losses do not re-trigger the guard at once.
         cash, held = eng.positions(s, sub)
         start_value = cash + sum(p.cost for p in held.values())

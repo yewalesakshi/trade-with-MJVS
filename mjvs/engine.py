@@ -523,11 +523,12 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
     # 3. Entries into free slots, equal money per slot
     cands = entry_candidates(s, algo, sub, rows, today)
     if algo.can_enter(now) and algo.auto_trade:
-        slots = sub.max_positions - len(held)
-        if slots <= 0 and cands:
+        unlimited = sub.max_positions == 0              # No limit: every BUY stock, a fixed amount each
+        slots = 10 ** 6 if unlimited else sub.max_positions - len(held)
+        if not unlimited and slots <= 0 and cands:
             notes.append(f"No free slot: {len(held)} of {sub.max_positions} positions are held ("
                          + ", ".join(s.split(":")[1] for s in held) + "), so no new buy. A slot frees when one is sold")
-        slot_cash = sub.amount / sub.max_positions
+        slot_cash = (sub.per_stock or sub.amount) if unlimited else sub.amount / sub.max_positions
         if not sub.paper:
             kite_cash = broker.available_cash(k) if account_ok else None
             if kite_cash is None:
@@ -554,7 +555,10 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
                 continue
             units = algo.quantity(price, min(slot_cash, cash)) if price else 0
             if units < 1:
-                skipped.append(f"{name} ({'Rs ' + format(price, ',.2f') + ' is more than one slot' if price else 'no price on Kite'})")
+                why = ("no price on Kite" if not price else
+                       f"Rs {price:,.2f} is more than {'the amount per stock' if unlimited else 'one slot'}" if price > slot_cash else
+                       f"not enough money left (Rs {max(cash, 0):,.0f})")
+                skipped.append(f"{name} ({why})")
                 continue
             res = place(s, k, sub, algo, sym, "BUY", units, note)
             if res:

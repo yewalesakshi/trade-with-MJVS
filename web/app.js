@@ -614,10 +614,14 @@ function appAlgo(id) {
     (a.ready ? "" : '<div class="note" style="margin-bottom:14px">This algo’s strategy is still being added, so it cannot be started yet.</div>') +
     (a.warning ? '<div class="note" role="alert" style="margin-bottom:14px;font-weight:600">⚠ ' + esc(a.warning) + "</div>" : "") +
     (a.ready && !a.auto_trade ? '<div class="info" style="margin-bottom:14px">This algo only <b>suggests</b> stocks that pass both the scanner and the TradingView strategy. See them below and on the <a href="#/app/suggestions">Suggestions</a> page.</div>' : "") +
-    '<div class="field"><label for="s-amt">Money for this algo</label><div class="amt"><span>₹</span><input id="s-amt" inputmode="numeric" value="' + Number(amount).toLocaleString("en-IN") + '"></div><small>' + (a.group === "fno" ? "Lots are worked out from this money: about 15% of one lot’s value is kept as margin (NIFTY: roughly ₹2.5–3 lakh per lot). Zerodha checks the real margin." : (a.max_price ? "" : "Any amount you choose. Split equally across positions, so each position gets this amount ÷ most positions.")) + '</small><small id="s-each"></small><div id="s-cash" class="small" style="margin-top:6px"></div></div>' +
+    '<div class="field"><label for="s-amt">Money for this algo</label><div class="amt"><span>₹</span><input id="s-amt" inputmode="numeric" value="' + Number(amount).toLocaleString("en-IN") + '"></div><small>' + (a.group === "fno" ? "Lots are worked out from this money: about 15% of one lot’s value is kept as margin (NIFTY: roughly ₹2.5–3 lakh per lot). Zerodha checks the real margin." : (a.max_price ? "" : "Any amount you choose. Split equally across positions (this amount ÷ most positions), or with No limit, a fixed amount per stock until this money is used up.")) + '</small><small id="s-each"></small><div id="s-cash" class="small" style="margin-top:6px"></div></div>' +
     '<div class="field"><label for="s-dd">Drawdown limit: <span id="s-ddv">' + dd + '%</span></label><input id="s-dd" type="range" min="5" max="' + (a.max_drawdown || 15) + '" step="1" value="' + dd + '"><small id="s-ddh"></small></div>' +
     (uniKeys.length > 1 ? '<div class="field"><label for="s-uni">What to trade</label><select id="s-uni">' + uniKeys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === uni ? " selected" : "") + ">" + esc(a.universes[k]) + "</option>"; }).join("") + "</select></div>" : "") +
-    '<div class="field" id="s-maxw"><label for="s-max">Most positions at once</label><input id="s-max" type="number" min="1" max="20" value="' + ((s0 && s0.max_positions) || a.max_positions) + '"></div>' +
+    '<div class="field" id="s-maxw"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><label for="s-max" style="margin:0">Most positions at once</label>' +
+      '<label style="display:flex;gap:6px;align-items:center;font-weight:600;margin:0"><input type="checkbox" id="s-nolim" style="width:auto"' + (s0 && s0.max_positions === 0 ? " checked" : "") + '> No limit</label></div>' +
+      '<input id="s-max" type="number" min="1" max="100" value="' + ((s0 && s0.max_positions) || a.max_positions) + '">' +
+      '<div id="s-perw" hidden><label for="s-per" style="margin-top:8px">Amount per stock</label><div class="amt"><span>₹</span><input id="s-per" inputmode="numeric" value="' + Number((s0 && s0.per_stock) || 200).toLocaleString("en-IN") + '"></div>' +
+      '<small>Buys every BUY stock from the scan with this amount each, until the money for this algo is used up.</small></div></div>' +
     '<div class="field"><div class="lbl">Mode</div><div class="seg" id="s-mode"><button type="button" data-v="paper">Paper (no real orders)</button><button type="button" data-v="live">Live</button></div>' +
     (CFG.allow_live ? "" : '<small>Live trading is switched off. ' + (DASH && DASH.is_admin ? '<a href="#/app/admin">Switch it on in Admin</a>.' : "The admin can switch it on.") + '</small>') + "</div>" +
     '<button class="btn block" type="button" id="s-go"' + (a.ready && a.auto_trade ? "" : " disabled") + '>Start algo</button>' +
@@ -644,7 +648,14 @@ function appAlgo(id) {
   if ((a.max_drawdown || 15) <= 5) $("s-dd").disabled = true;
   function amt() { return parseFloat(($("s-amt").value || "").replace(/[^0-9.]/g, "")) || 0; }
   function ddHint() { var v = +$("s-dd").value; $("s-ddv").textContent = v + "%"; $("s-ddh").textContent = a.group === "fno" ? "Stops taking new trades when losses on closed trades reach " + money.format(amt() * v / 100) + ". Each trade also has its own 5% stop loss." : a.sl_from_drawdown ? "Stop loss for each stock: sold if it falls " + v + "% below its buy price. The whole algo also stops if it is down " + money.format(amt() * v / 100) + " from its peak." : "Stops and sells everything if this algo is down " + money.format(amt() * v / 100) + " from its peak."; }
-  function maxVis() { $("s-maxw").hidden = a.group === "fno"; }
+  function maxVis() {
+    $("s-maxw").hidden = a.group === "fno";
+    var nl = $("s-nolim") && $("s-nolim").checked;
+    if ($("s-max")) $("s-max").hidden = !!nl;
+    if ($("s-perw")) $("s-perw").hidden = !nl;
+  }
+  on("s-nolim", "change", function () { maxVis(); cashHint(); });
+  on("s-per", "input", function (e) { var v = e.target.value.replace(/[^0-9]/g, ""); e.target.value = v ? Number(v).toLocaleString("en-IN") : ""; });
   function setMode(v) { paper = v === "paper"; $("s-mode").querySelectorAll("button").forEach(function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-v") === v); }); goLabel(); cashHint(); }
   function goLabel() {
     var g = $("s-go"), s = subOf(id), run = !!(s && s.running); if (!g) return;
@@ -655,7 +666,8 @@ function appAlgo(id) {
   function cashHint() {
     var el = $("s-cash"); if (!el) return;
     var n = $("s-max") ? (+$("s-max").value || a.max_positions) : a.max_positions;
-    if ($("s-each")) $("s-each").textContent = a.group === "fno" || a.max_price || !amt() ? "" : " Each stock gets about " + money.format(amt() / n) + " (" + money.format(amt()) + " ÷ " + n + ").";
+    var nl = $("s-nolim") && $("s-nolim").checked;
+    if ($("s-each")) $("s-each").textContent = a.group === "fno" || a.max_price || !amt() || nl ? "" : " Each stock gets about " + money.format(amt() / n) + " (" + money.format(amt()) + " ÷ " + n + ").";
     if (kiteCash == null) { el.innerHTML = ""; return; }
     el.innerHTML = amt() > kiteCash
       ? '<div class="note" role="alert" style="background:var(--bad-soft);color:var(--bad)"><b>Amount is less in your Zerodha account.</b> Available: ' + money.format(kiteCash) + ", you entered " + money.format(amt()) + ". " + (paper ? "Paper mode can still start; Live needs the full amount." : "Live cannot start: lower the amount or add money in Kite.") + "</div>"
@@ -671,7 +683,10 @@ function appAlgo(id) {
     var m = $("s-msg"), s = subOf(id);
     if (s && s.running) { api("/algos/" + id + "/stop", { method: "POST" }).then(function (x) { say(m, x.ok, x.ok ? "Algo stopped. Open positions are kept." : errText(x, "Could not stop")); refresh(); }); return; }
     if (!paper && !confirm("LIVE mode places REAL orders in your Zerodha account with real money, up to " + money.format(amt()) + ". Continue?")) return;
-    var body = { amount: amt(), drawdown_pct: +$("s-dd").value, max_positions: +$("s-max").value || a.max_positions, universe: $("s-uni") ? $("s-uni").value : "", paper: paper };
+    var nolim = $("s-nolim") && $("s-nolim").checked;
+    var body = { amount: amt(), drawdown_pct: +$("s-dd").value, max_positions: nolim ? 0 : (+$("s-max").value || a.max_positions),
+                 per_stock: nolim ? (parseFloat(($("s-per").value || "").replace(/[^0-9.]/g, "")) || 0) : 0,
+                 universe: $("s-uni") ? $("s-uni").value : "", paper: paper };
     api("/algos/" + id + "/start", { method: "POST", json: body }).then(function (x) { say(m, x.ok, x.ok ? "Algo started." + (x.d.warning ? " ⚠ " + x.d.warning : "") : errText(x, "Please check your settings")); refresh(); }).catch(function () { say(m, false, "Could not reach the server"); });
   });
   on("s-run", "click", function () {
@@ -766,7 +781,7 @@ function appAlgo(id) {
     $("kb").innerHTML = DASH.kite.fresh ? "" : kiteBanner(); on("kc2", "click", connectKite);
     var s = subOf(id), run = !!(s && s.running);
     $("runbadge").innerHTML = s ? (run ? '<span class="badge good"><span class="dot"></span>Running · ' + (s.paper ? "paper" : "LIVE") + "</span>" : '<span class="badge">Stopped</span>') : "";
-    ["s-amt", "s-dd", "s-uni", "s-max"].forEach(function (f) { if ($(f)) $(f).disabled = run || !a.ready || !a.auto_trade || (f === "s-dd" && (a.max_drawdown || 15) <= 5); });
+    ["s-amt", "s-dd", "s-uni", "s-max", "s-nolim", "s-per"].forEach(function (f) { if ($(f)) $(f).disabled = run || !a.ready || !a.auto_trade || (f === "s-dd" && (a.max_drawdown || 15) <= 5); });
     $("s-mode").querySelectorAll("button").forEach(function (b) { b.disabled = run || !a.ready; });
     if (run) setMode(s.paper ? "paper" : "live");
     goLabel();
