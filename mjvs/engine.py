@@ -269,22 +269,8 @@ def sync_gtts(s: Session, k, sub: Subscription, notes: list):
         except broker.TokenError:
             raise
         except Exception as e:
-            # GTT status unreadable: the Zerodha account itself tells whether the shares were sold
-            try:
-                have = broker.available_qty(k, sym, "CNC")
-            except broker.TokenError:
-                raise
-            except Exception:
-                have = None
-            if have == 0:
-                price = broker.ltp_many(k, [sym]).get(sym) or held[sym].avg
-                s.add(Trade(member_id=sub.member_id, algo_id=sub.algo_id, symbol=sym, side="SELL", qty=held[sym].qty,
-                            price=price, mode="live", status="COMPLETE", order_id=f"GTT-{t.gtt_id}",
-                            reason="sold in Zerodha (GTT); price approximate, GTT details unreadable"))
-                t.gtt_status = "done"
-                notes.append(f"{name}: no longer in your Zerodha account, recorded as sold (GTT)")
-            else:
-                notes.append(f"GTT {name}: status unreadable in Kite ({str(e)[:40]}); shares still held, GTT left in place")
+            # GTT status unreadable: reconcile_account() checks the account itself right after this
+            notes.append(f"GTT {name}: status unreadable in Kite ({str(e)[:40]}); checked against your account instead")
             continue
         status = str(g.get("status") or "").lower()
         if status == "active":
@@ -319,6 +305,58 @@ def sync_gtts(s: Session, k, sub: Subscription, notes: list):
         else:
             notes.append(f"GTT sell order for {name} is open in Kite ({st or 'waiting'})")
     s.commit()
+
+
+def reconcile_account(s: Session, k, sub: Subscription, algo, notes: list) -> bool:
+    """LIVE: the Zerodha account is the truth. A position this algo has on record but the account no
+    longer holds (sold by a GTT, in the Kite app or anywhere else) is recorded as sold, using the
+    real sell order from Zerodha when there is one. Returns False when the account cannot be read
+    (then nothing is changed and no new buy is made this run)."""
+    try:
+        have = broker.account_quantities(k)
+        orders = k.orders() or []
+    except broker.TokenError:
+        raise
+    except Exception as e:
+        notes.append(f"Could not read your Zerodha account ({str(e)[:60]}); nothing changed, no new buy this run")
+        return False
+    pending = {t.symbol for t in s.query(Trade).filter_by(member_id=sub.member_id, algo_id=sub.algo_id,
+                                                         mode="live", status="PENDING")}
+    _, held = positions(s, sub)
+    changed = False
+    for sym, p in held.items():
+        if p.qty <= 0 or sym in pending:          # an order still filling is not a sale
+            continue
+        name = sym.split(":")[1]
+        actual = max(have.get((algo.product, name), 0), 0)
+        missing = p.qty - actual
+        if missing <= 0:
+            continue
+        known = {t.order_id for t in s.query(Trade).filter_by(member_id=sub.member_id, symbol=sym, mode="live")}
+        sells = [o for o in orders if o.get("tradingsymbol") == name and o.get("transaction_type") == "SELL"
+                 and o.get("status") == "COMPLETE" and str(o.get("order_id")) not in known]
+        if sells:
+            o = sells[-1]
+            qty = min(missing, int(o.get("filled_quantity") or missing))
+            price, oid = float(o.get("average_price") or 0), str(o.get("order_id"))
+            how = "sold in Zerodha (real order " + oid + ")"
+        else:
+            qty = missing
+            price = broker.ltp_many(k, [sym]).get(sym) or p.avg
+            oid = f"ACCOUNT-{config.ist_today():%Y%m%d}"
+            how = "not in your Zerodha account any more; sell order not found today, price = last price (approximate)"
+        s.add(Trade(member_id=sub.member_id, algo_id=sub.algo_id, symbol=sym, side="SELL", qty=qty, price=price,
+                    mode="live", status="COMPLETE", order_id=oid, reason=how[:200]))
+        t = opening_buy(s, sub, sym)
+        if t and t.gtt_id and t.gtt_status in ("active", "triggered", "error"):
+            if qty >= p.qty and t.gtt_status == "active":
+                broker.delete_gtt(k, t.gtt_id)        # shares are gone: an active GTT would only fail later
+            t.gtt_status = "done" if qty >= p.qty else t.gtt_status
+        notes.append(f"{name}: {qty} recorded as sold @ {price:.2f} ({'real Zerodha order' if sells else 'approximate price'})")
+        changed = True
+    if changed:
+        s.commit()
+    return True
 
 
 def sell(s, k, sub, algo, symbol, ours: int, reason: str, notes: list):
@@ -389,6 +427,9 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
         reconcile_pending(s, k, sub)
         if algo.use_gtt:
             sync_gtts(s, k, sub, notes)
+    account_ok = True
+    if not sub.paper and not hasattr(algo, "custom_run"):
+        account_ok = reconcile_account(s, k, sub, algo, notes)
 
     cash, held = positions(s, sub)
     prices = broker.ltp_many(k, list(held))
@@ -434,6 +475,13 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
             notes.append(f"No free slot: {len(held)} of {sub.max_positions} positions are held ("
                          + ", ".join(s.split(":")[1] for s in held) + "), so no new buy. A slot frees when one is sold")
         slot_cash = sub.amount / sub.max_positions
+        if not sub.paper:
+            kite_cash = broker.available_cash(k) if account_ok else None
+            if kite_cash is None:
+                slots = 0
+                notes.append("Zerodha cash could not be read, so no new buy this run")
+            else:
+                cash = min(cash, kite_cash)
         picks, seen = [], set(held) | bought_recently(s, sub, algo.reentry_days, now)
         for sym, note in cands:
             if sym not in seen:

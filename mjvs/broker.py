@@ -293,6 +293,19 @@ def wait_for_fill(k, order_id, tries: int = 6):
             int(last.get("filled_quantity") or 0), last.get("status_message") or "")
 
 
+def account_quantities(k) -> dict:
+    """What the Zerodha account really holds now: {(product, tradingsymbol): quantity}.
+    CNC = holdings + T1 + today's CNC net position (a sale today shows as a negative position)."""
+    out: dict = {}
+    for h in k.holdings() or []:
+        key = ("CNC", h.get("tradingsymbol"))
+        out[key] = out.get(key, 0) + int(h.get("quantity") or 0) + int(h.get("t1_quantity") or 0)
+    for p in (k.positions() or {}).get("net", []):
+        key = (p.get("product"), p.get("tradingsymbol"))
+        out[key] = out.get(key, 0) + int(p.get("quantity") or 0)
+    return out
+
+
 def available_qty(k, symbol: str, product: str) -> int:
     """Units really in the Kite account: holdings + T1 + today's net position."""
     name = symbol.split(":")[1]
