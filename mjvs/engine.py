@@ -249,6 +249,15 @@ def ensure_gtts(s: Session, k, sub: Subscription, algo, notes: list):
             ltp = broker.ltp_many(k, [sym]).get(sym) or p.avg
             if not sl < ltp < tg:          # already past a level: MJVS sells at this run instead
                 continue
+            # bought again while holding: the old GTT covers only the old quantity, so it is replaced
+            # by one GTT for the whole holding at the new average price
+            for old in (s.query(Trade).filter(Trade.member_id == sub.member_id, Trade.algo_id == sub.algo_id,
+                                              Trade.mode == "live", Trade.symbol == sym, Trade.side == "BUY",
+                                              Trade.id != t.id, Trade.gtt_id != "", Trade.gtt_id.isnot(None),
+                                              Trade.gtt_status.in_(("active", "error", "unknown")))):
+                if old.gtt_status == "active":
+                    broker.delete_gtt(k, old.gtt_id)
+                old.gtt_status = "replaced"
             tick = broker.instrument_tick(k, sym)
             t.gtt_id = broker.place_gtt_oco(k, sym, p.qty, sl, tg, ltp, algo.product, tick)
             t.gtt_status, t.gtt_sl, t.gtt_target = "active", broker.tick_round(sl, tick), broker.tick_round(tg, tick)
@@ -495,16 +504,19 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
 
     cash, held = positions(s, sub)
     prices = broker.ltp_many(k, list(held))
-    value = account_value(cash, held, prices)
+    value = account_value(cash, held, prices)          # = money + profit/loss (buys and sells do not move it)
     sub.peak_value = max(sub.peak_value or sub.amount, value)
-    down = (sub.peak_value - value) / sub.peak_value * 100 if sub.peak_value > 0 else 0
+    base = sub.peak_value
+    if algo.scan_buys:          # Penny: held stocks do not use the money, so the fall is measured against
+        base += sum(p.cost for p in held.values())     # the money per scan + what is invested in held stocks
+    down = (sub.peak_value - value) / base * 100 if base > 0 else 0
 
     # 1. Drawdown guard
     if down >= sub.drawdown_pct:
         for sym, p in held.items():
             sell(s, k, sub, algo, sym, p.qty, "drawdown limit", notes)
         sub.running = False
-        sub.last_message = (f"Drawdown limit hit: down {down:.1f}% from the peak of Rs {sub.peak_value:,.0f}. "
+        sub.last_message = (f"Drawdown limit hit: down {down:.1f}% (Rs {sub.peak_value - value:,.0f}) from the peak. "
                             "Sold everything and stopped. " + "; ".join(notes))
         sub.last_run_date, sub.last_run_at = today, now_ist()
         return
@@ -529,35 +541,63 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
                 cash += res[0] * res[1]
                 held.pop(sym)
 
-    # 3. New buys. max_positions = how many NEW stocks to buy per day (stocks already held do not
-    #    count; Zerodha has no such limit), each for Money ÷ max_positions, strongest signal (RSI) first.
+    # 3. New buys.
+    #    Penny (scan_buys): buys ONLY from a new scan, once per scan: up to max_positions stocks
+    #    ("Stocks to buy per scan"), each for Money ÷ max_positions, strongest signal (RSI) first.
+    #    Held stocks do not count and do not use the money; the only cap is the real Zerodha cash.
+    #    Others: max_positions = NEW stocks per day (held stocks do not count), each for Money ÷ max_positions.
     #    0 = No limit: every BUY stock with a fixed amount each.
     cands = entry_candidates(s, algo, sub, rows, today)
-    if algo.can_enter(now) and algo.auto_trade:
+    go = algo.can_enter(now) and algo.auto_trade
+    scan_id = ""
+    if go and algo.scan_buys:
+        st = s.get(AlgoState, f"{algo.id}:{sub.universe or algo.default_universe}")
+        scan_id = to_ist(st.scan_at).strftime("%Y-%m-%d %H:%M:%S") if (st and st.scan_at and rows) else ""
+        if not scan_id:
+            go = False
+        elif scan_id == (sub.last_scan_used or ""):
+            go = False
+            if cands:
+                notes.append(f"BUY stocks of the scan at {to_ist(st.scan_at):%d %b %H:%M} were already used; "
+                             "new buys come from the next scan (Scan now or the daily scan)")
+    if go:
         unlimited = sub.max_positions == 0
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-        bought_today = (s.query(Trade).filter(Trade.member_id == sub.member_id, Trade.algo_id == sub.algo_id,
-                                              Trade.mode == mode_of(sub), Trade.side == "BUY",
-                                              Trade.status.in_(COUNTED), Trade.at >= midnight).count())
-        slots = 10 ** 6 if unlimited else sub.max_positions - bought_today
-        if not unlimited and slots <= 0 and cands:
-            notes.append(f"Already bought {bought_today} of {sub.max_positions} stocks today; more BUY stocks are taken "
-                         "next trading day (or raise 'Stocks to buy per day')")
+        if algo.scan_buys:
+            slots = 10 ** 6 if unlimited else sub.max_positions
+            cash = sub.amount                       # money to spend on this scan
+        else:
+            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+            bought_today = (s.query(Trade).filter(Trade.member_id == sub.member_id, Trade.algo_id == sub.algo_id,
+                                                  Trade.mode == mode_of(sub), Trade.side == "BUY",
+                                                  Trade.status.in_(COUNTED), Trade.at >= midnight).count())
+            slots = 10 ** 6 if unlimited else sub.max_positions - bought_today
+            if not unlimited and slots <= 0 and cands:
+                notes.append(f"Already bought {bought_today} of {sub.max_positions} stocks today; more BUY stocks are taken "
+                             "next trading day (or raise 'Stocks to buy per day')")
         if not sub.paper:
             kite_cash = broker.available_cash(k) if account_ok else None
             if kite_cash is None:
-                slots = 0
+                slots, scan_id = 0, ""              # scan not marked as used: tried again at the next check
                 notes.append("Zerodha cash could not be read, so no new buy this run")
             else:
+                if algo.scan_buys and kite_cash < cash:
+                    notes.append(f"Zerodha cash Rs {kite_cash:,.0f} is less than the money per scan Rs {cash:,.0f}")
                 cash = min(cash, kite_cash)
         # money per new stock (fixed slot): Money for this algo ÷ number of stocks, e.g. 500 ÷ 5 = 100.
         # Each stock is bought for at most this amount; a stock whose 1 share costs more is skipped.
         # If fewer BUY stocks are found, the rest of the money simply stays free. No limit = fixed amount.
         slot_cash = (sub.per_stock or sub.amount) if unlimited else sub.amount / max(sub.max_positions, 1)
         if slots > 0 and cands and cash < slot_cash:
-            notes.append(f"Free money Rs {max(cash, 0):,.0f} is less than one stock's amount Rs {slot_cash:,.0f} "
-                         "(the rest is in held stocks); raise 'Money for this algo' to buy more")
-        picks, seen = [], set(held) | bought_recently(s, sub, algo.reentry_days, now)
+            notes.append(f"Free money Rs {max(cash, 0):,.0f} is less than one stock's amount Rs {slot_cash:,.0f}"
+                         + ("" if algo.scan_buys else " (the rest is in held stocks); raise 'Money for this algo' to buy more"))
+        if algo.scan_buys:                      # held stocks can be bought again; not one sold today
+            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+            seen = {t.symbol for t in s.query(Trade).filter(Trade.member_id == sub.member_id, Trade.algo_id == sub.algo_id,
+                                                           Trade.mode == mode_of(sub), Trade.side == "SELL",
+                                                           Trade.status.in_(COUNTED), Trade.at >= midnight)}
+        else:
+            seen = set(held) | bought_recently(s, sub, algo.reentry_days, now)
+        picks = []
         for sym, note in cands:
             if sym not in seen:
                 seen.add(sym)
@@ -588,6 +628,8 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
                 notes.append(f"BOUGHT {res[0]} {name} @ {res[1]:.2f}")
             else:
                 notes.append(f"BUY {name} rejected by Kite")
+        if algo.scan_buys and scan_id:
+            sub.last_scan_used = scan_id            # this scan's BUY list is used once
         if skipped:
             notes.append("skipped: " + ", ".join(skipped[:8]) + (f" and {len(skipped) - 8} more" if len(skipped) > 8 else ""))
 

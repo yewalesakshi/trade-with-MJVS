@@ -70,6 +70,8 @@ class Algo:
     default_drawdown = 10     # starting value of the drawdown slider
     max_price = None          # only stocks whose price is below this (Rs) are scanned and bought
     sl_from_drawdown = False  # True: each position's stop loss % = the member's drawdown limit
+    scan_buys = False         # True (Penny): buys ONLY from each new scan, once; 'Stocks to buy per scan';
+                              # held stocks do not use the algo's money (Money = amount spent per scan)
     use_gtt = False           # True: in LIVE mode each buy gets a Zerodha GTT (OCO: target + stop loss)
     manual_scan = False       # True: the scanner runs ONLY when the member presses "Scan now"; the algo
                               # trades from today's latest scan (exits are still checked automatically)
@@ -163,7 +165,7 @@ class Algo:
                 "once_per_day": self.once_per_day, "require_tradingview": self.require_tradingview, "suggest": self.suggest,
                 "auto_trade": self.auto_trade, "match_minutes": self.match_minutes, "run_every": self.run_every,
                 "window": [self.window[0].strftime("%H:%M"), self.window[1].strftime("%H:%M")],
-                "exits_note": self.exits_note, "candle_label": self.candle_label,
+                "exits_note": self.exits_note, "scan_buys": self.scan_buys, "candle_label": self.candle_label,
                 "exits": {"stop_loss_pct": self.stop_loss_pct, "target_pct": self.target_pct,
                           "max_hold_days": self.max_hold_days,
                           "max_hold_minutes": self.max_hold_minutes,

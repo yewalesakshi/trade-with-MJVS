@@ -52,7 +52,8 @@ class Penny(Algo):
     sl_from_drawdown = True               # stop loss % = drawdown slider (default 5%)
     default_drawdown = 5
     max_price = 100                       # only stocks under Rs 100
-    max_positions = 5                     # new stocks to buy per day (held stocks do not count)
+    max_positions = 5                     # new stocks to buy per scan (held stocks do not count)
+    scan_buys = True                      # buys only from each NEW scan (once), Money = amount per scan
     manual_scan = True                    # scans only when "Scan now" is pressed; then trades at once
     use_gtt = True                        # Live: target + stop loss also placed as a Zerodha GTT (OCO)
     exits_note = ("Target 8% above the buy price. Stop loss = your drawdown limit (default 5%) below the buy price. "

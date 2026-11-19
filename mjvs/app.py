@@ -316,12 +316,27 @@ def sub_view(s, sub: Subscription, prices: dict) -> dict:
                 row["gtt"] = {"id": t.gtt_id, "status": t.gtt_status, "sl": t.gtt_sl, "target": t.gtt_target}
         pos.append(row)
     value = eng.account_value(cash, held, prices)
-    if getattr(ALGOS.get(sub.algo_id), "group", "") == "fno":
+    algo = ALGOS.get(sub.algo_id)
+    invested = sum(p.cost for p in held.values())
+    pnl = value - sub.amount
+    stop_at = sub.peak_value * (1 - sub.drawdown_pct / 100) if sub.peak_value else 0
+    if getattr(algo, "scan_buys", False):
+        # Penny: held stocks do not use the algo's money: the value shown is what the held stocks are
+        # worth now; the algo stops when profit/loss falls the drawdown % of (money + invested) from its best
+        peak = sub.peak_value or sub.amount
+        stop_at = peak - (peak + invested) * sub.drawdown_pct / 100
+        value = sum(p.qty * prices.get(sym, p.avg) for sym, p in held.items())
+        cash = sub.amount
+    if getattr(algo, "group", "") == "fno":
         cash = value          # futures: money = amount + profit/loss (no shares bought with cash)
     return {"algo_id": sub.algo_id, "amount": sub.amount, "drawdown_pct": sub.drawdown_pct,
             "max_positions": sub.max_positions, "per_stock": sub.per_stock or 0, "universe": sub.universe, "paper": sub.paper,
             "running": sub.running, "peak": round(sub.peak_value or 0, 2), "cash": round(cash, 2),
-            "value": round(value, 2), "pnl": round(value - sub.amount, 2),
+            "value": round(value, 2), "pnl": round(pnl, 2),
+            "scan_buys": bool(getattr(algo, "scan_buys", False)), "invested": round(invested, 2),
+            "best_pnl": round((sub.peak_value or sub.amount) - sub.amount, 2),
+            "stop_pnl": round(stop_at - sub.amount, 2) if stop_at else None,
+            "last_scan_used": sub.last_scan_used or "",
             "last_run_at": iso(sub.last_run_at), "last_message": sub.last_message, "positions": pos}
 
 
@@ -405,7 +420,7 @@ def algo_start(algo_id: str, b: Settings, mid: int = Depends(current_member_id))
         # Drawdown counts from today's value, so past losses do not re-trigger the guard at once.
         cash, held = eng.positions(s, sub)
         start_value = cash + sum(p.cost for p in held.values())
-        if start_value <= 0:
+        if start_value <= 0 and not algo.scan_buys:
             raise HTTPException(400, "This algo account has no money left. Raise the amount"
                                      + (" or clear paper trades." if sub.paper else "."))
         # Chartink alerts that arrived before starting are not acted on.
@@ -418,7 +433,40 @@ def algo_start(algo_id: str, b: Settings, mid: int = Depends(current_member_id))
                             + ("Runs once a day" if algo.once_per_day else f"Checks every {algo.run_every} min")
                             + f" between {algo.window[0]:%H:%M} and {algo.window[1]:%H:%M} on market days.")
         s.commit()
+        if algo.scan_buys:
+            start_scan_buys(s, algo, m, sub, universe)
     return {"running": True, "warning": warning}
+
+
+def start_scan_buys(s: Session, algo, m: Member, sub: Subscription, universe: str):
+    """Penny on Start: trade at once from today's latest scan, or scan first when there is none."""
+    now = config.ist_now()
+    head = ("Started in paper mode. " if sub.paper else "Started in LIVE mode. ") + "Buys only from each new scan (once per scan): "
+    st = s.get(AlgoState, f"{algo.id}:{universe}")
+    fresh = st and st.scan_at and broker.data_day(eng.to_ist(st.scan_at)) == broker.data_day(now)
+    if not eng.token_fresh(m):
+        sub.last_message = head + "connect Kite, then press Scan now."
+        s.commit()
+        return
+    if fresh:
+        used = (sub.last_scan_used or "") == eng.to_ist(st.scan_at).strftime("%Y-%m-%d %H:%M:%S")
+        sub.last_message = head + (f"the latest scan ({eng.to_ist(st.scan_at):%d %b %H:%M}) was already used; "
+                                   "press Scan now for new stocks." if used else
+                                   f"buying from the latest scan ({eng.to_ist(st.scan_at):%d %b %H:%M}) "
+                                   + ("now." if now.weekday() < 5 and algo.window[0] <= now.time() <= algo.window[1]
+                                      else f"at the next market open ({algo.window[0]:%H:%M})."))
+        s.commit()
+        if not used:
+            rows = json.loads(st.scan or "[]")
+            threading.Thread(target=lambda: eng.run_after_scan(algo, universe, rows), daemon=True).start()
+        return
+    sub.last_message = head + "no scan for the latest candles yet, so a scan has started; it buys when the scan finishes."
+    s.commit()
+    key = f"{algo.id}:{universe}"
+    with _jobs_lock:
+        if not _scan_jobs.get(key, {}).get("running"):
+            _scan_jobs[key] = {"running": True, "done": 0, "total": 0, "step": "Getting the stock list from Kite", "error": "", "note": ""}
+            threading.Thread(target=_run_scan_job, args=(algo, universe, key, m.kite_token, m.id), daemon=True).start()
 
 
 def kite_cash(s: Session, m: Member) -> float | None:
