@@ -105,7 +105,7 @@ def scan(algo, k, symbols: list[str], now: dt.datetime, progress=None) -> list[d
             return None              # e.g. Penny stock: only stocks under Rs 100 (no download needed)
         try:
             df = broker.history(k, q["instrument_token"], algo.interval, algo.candles, now)
-            if len(df) < algo.candles - 30:
+            if len(df) < getattr(algo, "min_history", algo.candles - 30):
                 raise ValueError("Not enough price history")
             df = algo.indicators(df)
             last = df.iloc[-1]
@@ -269,7 +269,22 @@ def sync_gtts(s: Session, k, sub: Subscription, notes: list):
         except broker.TokenError:
             raise
         except Exception as e:
-            notes.append(f"GTT {name}: could not read ({str(e)[:60]})")
+            # GTT status unreadable: the Zerodha account itself tells whether the shares were sold
+            try:
+                have = broker.available_qty(k, sym, "CNC")
+            except broker.TokenError:
+                raise
+            except Exception:
+                have = None
+            if have == 0:
+                price = broker.ltp_many(k, [sym]).get(sym) or held[sym].avg
+                s.add(Trade(member_id=sub.member_id, algo_id=sub.algo_id, symbol=sym, side="SELL", qty=held[sym].qty,
+                            price=price, mode="live", status="COMPLETE", order_id=f"GTT-{t.gtt_id}",
+                            reason="sold in Zerodha (GTT); price approximate, GTT details unreadable"))
+                t.gtt_status = "done"
+                notes.append(f"{name}: no longer in your Zerodha account, recorded as sold (GTT)")
+            else:
+                notes.append(f"GTT {name}: status unreadable in Kite ({str(e)[:40]}); shares still held, GTT left in place")
             continue
         status = str(g.get("status") or "").lower()
         if status == "active":

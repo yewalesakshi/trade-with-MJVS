@@ -37,6 +37,7 @@ class Penny(Algo):
     interval = "day"                      # fetched daily, turned into weekly candles below
     candle_label = "weekly"
     candles = WEEKS_NEEDED * 5 + 10
+    min_history = (rules.MA_LENGTH + 2) * 5   # 52 weeks of trading days is enough for the weekly rule
     universes = {"all": "All NSE stocks"}
     default_universe = "all"
     columns = rules.COLUMNS
