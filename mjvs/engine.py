@@ -10,10 +10,13 @@ import threading
 import datetime as dt
 from dataclasses import dataclass
 
+import logging
+
 import pandas as pd
 from sqlalchemy.orm import Session
 
 from . import broker, config
+log = logging.getLogger("mjvs.engine")
 from .algos import ALGOS
 from .db import engine as db_engine, Member, Subscription, Trade, Signal, Suggestion, AlgoState, now_ist
 from . import signals as sigmod
@@ -192,6 +195,8 @@ def place(s: Session, k, sub: Subscription, algo, symbol: str, side: str, qty: i
         t = Trade(**common, qty=qty, price=ltp, status="PENDING", reason=reason, order_id=order_id)
     s.add(t)
     s.commit()
+    (log.error if t.status == "REJECTED" else log.info)(
+        "ORDER %s %s %s x%s @ %.2f %s (order %s, %s)", sub.algo_id, side, symbol, t.qty, t.price, t.status, order_id, t.reason)
     return None if t.status == "REJECTED" else (t.qty, t.price)
 
 
@@ -348,6 +353,7 @@ def sync_stopped_live(s: Session, now: dt.datetime):
             if msg and msg != "matches your Zerodha account":
                 sub.last_message = f"Stopped; checked against your Zerodha account: {msg}"
                 s.commit()
+                log.info("[%s #%s stopped LIVE] %s", sub.algo_id, sub.id, sub.last_message)
         except broker.TokenError:
             pass
         except Exception as e:
@@ -597,19 +603,24 @@ def guarded(s: Session, sub: Subscription, fn):
     if not lock.acquire(blocking=False):
         sub.last_message = "A run is already in progress. Try again in a minute."
         return
+    tag = f"[{sub.algo_id} #{sub.id} member {sub.member_id} {'paper' if sub.paper else 'LIVE'}]"
     try:
         fn()
+        log.info("%s %s", tag, sub.last_message)
     except broker.TokenError:
         m = s.get(Member, sub.member_id)
         m.kite_token = None
         sub.last_message = "Kite login expired. Connect Kite again to let the algo run."
+        log.warning("%s %s", tag, sub.last_message)
     except broker.OrderRefused as e:
         sub.last_message = str(e)
+        log.error("%s order refused: %s", tag, e)
     except broker.PermissionError_:
         sub.last_message = broker.NO_MARKET_DATA
+        log.error("%s %s", tag, sub.last_message)
     except Exception as e:     # retried at the next check
         sub.last_message = f"Error, will retry at the next check: {str(e)[:200]}"
-        print(f"subscription {sub.id} error: {e!r}")
+        log.exception("%s run failed", tag)
     finally:
         s.commit()
         lock.release()

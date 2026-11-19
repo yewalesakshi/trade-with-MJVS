@@ -1021,9 +1021,38 @@ function appProfile() {
   on("out", "click", logout);
 }
 
+function adminLogsCard() {
+  return '<div class="card" id="logcard"><div class="card-head"><div><h3>Logs</h3><p class="muted small" id="lg-file">Everything the app does: algo runs, orders, GTT, scans, errors with full details. Secrets are hidden.</p></div>' +
+    '<div class="lg-ctl"><div class="seg" id="lg-lv"><button type="button" data-v="">All</button><button type="button" data-v="WARNING">Warnings</button><button type="button" data-v="ERROR">Errors</button></div>' +
+    '<input id="lg-q" placeholder="Search (e.g. ORDER, penny, SBIN)" style="width:220px"><select id="lg-n" style="width:auto"><option>200</option><option selected>500</option><option>2000</option></select>' +
+    '<button class="btn sm ghost" type="button" id="lg-r">Refresh</button><button class="btn sm quiet" type="button" id="lg-d">Download</button></div></div>' +
+    '<p id="lg-m" class="msg small" role="status"></p><pre class="logbox lg-box" id="lg-box">Loading…</pre></div>';
+}
+function adminLogsInit() {
+  var lv = "";
+  function load() {
+    var m = $("lg-m"); if (!$("lg-box")) return;
+    api("/admin/logs?lines=" + $("lg-n").value + "&level=" + lv + "&q=" + encodeURIComponent($("lg-q").value.trim())).then(function (x) {
+      if (!x.ok) { say(m, false, errText(x, "Could not read the log")); return; }
+      $("lg-file").textContent = "Log file on the server: " + x.d.file + " · showing " + x.d.count + " entries (newest at the bottom). Secrets are hidden.";
+      $("lg-box").innerHTML = x.d.entries.length ? x.d.entries.map(function (e) {
+        var cls = /\| (ERROR|CRITICAL)/.test(e.slice(0, 40)) ? "lg-e" : /\| WARNING/.test(e.slice(0, 40)) ? "lg-w" : "";
+        return '<span class="' + cls + '">' + esc(e) + "</span>";
+      }).join("\n") : "No log entries match.";
+      var b = $("lg-box"); b.scrollTop = b.scrollHeight; say(m, true, "");
+    });
+  }
+  $("lg-lv").querySelectorAll("button").forEach(function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-v") === lv); });
+  on("lg-lv", "click", function (e) { var b = e.target.closest("button"); if (!b) return; lv = b.getAttribute("data-v"); this.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", x === b); }); load(); });
+  on("lg-r", "click", load); on("lg-n", "change", load);
+  on("lg-q", "keydown", function (e) { if (e.key === "Enter") load(); });
+  on("lg-d", "click", function () { download("/admin/logs/download", "mjvs-log.txt"); });
+  load();
+}
 function appAdmin() {
   if (!DASH.is_admin) { go("/app"); return; }
-  appLayout("admin", "Admin", '<div class="stack"><div class="card" id="ks"></div><div class="grid g3" id="ad-k"></div><div class="card"><div class="card-head"><div><h3>Algos and webhooks</h3><p class="muted small">Paste the Chartink URL into the algo’s Chartink alert, and the TradingView URL into its TradingView strategy alert. A stock in both becomes a Suggestion.</p></div></div><div id="ad-a"></div></div>' +
+  setTimeout(adminLogsInit, 0);
+  appLayout("admin", "Admin", '<div class="stack"><div class="card" id="ks"></div><div class="grid g3" id="ad-k"></div>' + adminLogsCard() + '<div class="card"><div class="card-head"><div><h3>Algos and webhooks</h3><p class="muted small">Paste the Chartink URL into the algo’s Chartink alert, and the TradingView URL into its TradingView strategy alert. A stock in both becomes a Suggestion.</p></div></div><div id="ad-a"></div></div>' +
     '<div class="grid g2"><div class="card"><h3>Connect a Chartink scanner</h3><ol class="muted" style="padding-left:20px;margin:10px 0 0;font-size:14px"><li>Open your scanner on chartink.com and press <b>Create Alert</b> (needs a Chartink plan with webhooks).</li><li>Paste the webhook URL of the algo it belongs to.</li><li>Chartink must reach this server over the internet. For a home PC, run a tunnel (for example Cloudflare Tunnel) and set <code>PUBLIC_URL</code> in START_MJVS.bat to the tunnel address.</li><li>Test with the form here first, in paper mode.</li></ol></div>' +
     '<div class="card"><h3>Send a test signal</h3><p class="muted small">Acts like a real alert. Only members running that algo are affected.</p><form id="tsf" style="margin-top:12px"><div class="field"><label for="ts-a">Algo</label><select id="ts-a">' + CFG.algos.filter(function (a) { return a.source === "chartink" || a.require_tradingview; }).map(function (a) { return '<option value="' + a.id + '">' + esc(a.name) + "</option>"; }).join("") + '</select></div>' +
     '<div class="grid g2" style="gap:12px"><div class="field"><label for="ts-src">Comes from</label><select id="ts-src"><option value="chartink">Scanner (Chartink)</option><option value="tradingview">TradingView strategy</option></select></div><div class="field"><label for="ts-act">Action</label><select id="ts-act"><option>BUY</option><option>SELL</option></select></div></div><div class="field"><label for="ts-s">Stocks</label><input id="ts-s" placeholder="SBIN, ITC" required><small>NSE symbols, comma separated</small></div><button class="btn" type="submit">Send test signal</button><p id="ts-m" class="msg" role="status"></p></form></div></div>' +

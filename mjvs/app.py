@@ -1,5 +1,6 @@
 """MJVS web API. The website (web/) is served from the same address."""
 import json
+import logging
 import os
 import time
 import datetime as dt
@@ -21,8 +22,46 @@ from . import signals as sigmod
 from . import settings_store as store
 from .security import current_member_id, make_token, read_token, hasher
 
+from . import logs
+logs.setup()
+log = logs.log
 init_db()
 app = FastAPI(title="MJVS")
+
+
+@app.middleware("http")
+async def _log_requests(request: Request, call_next):
+    """One line per request; a crash is logged with its full traceback and answered with a 500."""
+    t0 = time.time()
+    try:
+        resp = await call_next(request)
+    except Exception:
+        log.exception("Server error on %s %s", request.method, request.url.path)
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": "Server error. The admin can see the details in Admin -> Logs."}, status_code=500)
+    path = request.url.path
+    if not path.startswith("/static") and path not in ("/health",):
+        lvl = logging.WARNING if resp.status_code >= 400 else logging.INFO
+        logging.getLogger("mjvs.http").log(lvl, "%s %s -> %s (%d ms)", request.method, path, resp.status_code, (time.time() - t0) * 1000)
+    return resp
+
+
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as _StarletteHTTPException
+from fastapi.exception_handlers import http_exception_handler as _http_handler, request_validation_exception_handler as _val_handler
+
+
+@app.exception_handler(_StarletteHTTPException)
+async def _log_http_errors(request: Request, exc):
+    if exc.status_code not in (401, 404):
+        logging.getLogger("mjvs.http").warning("%s %s refused (%s): %s", request.method, request.url.path, exc.status_code, exc.detail)
+    return await _http_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def _log_validation(request: Request, exc):
+    logging.getLogger("mjvs.http").warning("%s %s invalid input: %s", request.method, request.url.path, str(exc.errors())[:300])
+    return await _val_handler(request, exc)
 app.add_middleware(CORSMiddleware, allow_origins=config.FRONTEND_ORIGINS,
                    allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
@@ -824,6 +863,7 @@ def manual_order(b: ManualOrder, mid: int = Depends(current_member_id)):
                       status="PAPER", reason=note, order_id=f"PAPER-{int(time.time() * 1000)}")
             s.add(t)
             s.commit()
+            log.info("MANUAL PAPER member %s %s %s x%s @ %.2f", mid, b.side, full, qty, fill)
             return {"ok": True, "message": f"Paper {b.side} {qty} {ins['symbol']} at {fill:.2f}"}
         try:
             order_id = broker.send_manual_order(k, ins["exchange"], ins["symbol"], b.side, qty, b.product, b.order_type, price)
@@ -842,6 +882,9 @@ def manual_order(b: ManualOrder, mid: int = Depends(current_member_id)):
                   reason=(msg if status == "REJECTED" else note)[:200], order_id=order_id)
         s.add(t)
         s.commit()
+        (log.error if status == "REJECTED" else log.info)(
+            "MANUAL ORDER member %s %s %s x%s %s @ %s %s (order %s) %s", mid, b.side, full, filled or qty, b.order_type,
+            avg or price or ltp, status, order_id, msg or "")
         if status == "REJECTED":
             raise HTTPException(400, f"Zerodha rejected the order: {msg or st}")
         gtt_msg = ""
@@ -1056,6 +1099,21 @@ def public_ip() -> str:
 
 class LiveIn(BaseModel):
     on: bool
+
+
+@app.get("/admin/logs")
+def admin_logs(lines: int = 500, level: str = "", q: str = "", mid: int = Depends(need_admin)):
+    """Latest log entries for the Admin page (newest last). level: '' | WARNING | ERROR."""
+    entries = logs.tail(lines, level, q)
+    return {"entries": entries, "file": logs.LOG_FILE, "count": len(entries)}
+
+
+@app.get("/admin/logs/download")
+def admin_logs_download(mid: int = Depends(need_admin)):
+    """The whole log (all kept files, oldest first) as one text file."""
+    from fastapi.responses import PlainTextResponse
+    text = "\n".join(logs.tail(10 ** 7))
+    return PlainTextResponse(text, headers={"Content-Disposition": f'attachment; filename="mjvs-log-{config.ist_today()}.txt"'})
 
 
 class ScanTimeIn(BaseModel):

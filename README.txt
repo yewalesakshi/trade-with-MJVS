@@ -149,6 +149,13 @@ FILES
   web\                        the website
   ADDING_A_STRATEGY.txt       how a new algo is filled in
 
+LOGS (Admin page -> Logs)
+  Every algo run and its message, every order (placed, filled, rejected with Zerodha's reason),
+  GTT and account checks, scans, every error shown to a user, every server error with its full
+  details, and anything the app prints. Filter All / Warnings / Errors, search, or Download.
+  File: logs/mjvs.log in the data folder (server: /opt/mjvs/data/logs), 5 files x 5 MB kept.
+  Passwords, Kite tokens and the API secret are hidden before anything is written.
+
 To see saved data: double-click view_database.bat
 To stop: close the black window.
 
