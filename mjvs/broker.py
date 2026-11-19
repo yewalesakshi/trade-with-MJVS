@@ -166,6 +166,17 @@ def _fetch(k, instrument_token: int, interval: str, candles: int, now: dt.dateti
 SL_LIMIT_GAP = 0.02      # the stop-loss leg sells at a LIMIT 2% below its trigger, so it fills in a fast fall
 
 
+def instrument_tick(k, symbol: str) -> float:
+    """The stock's real price step from Zerodha's instrument list (0.01 for most cheap shares)."""
+    try:
+        from .algos import universe as uni
+        ins = uni.find_instrument(k, symbol)
+        t = float((ins or {}).get("tick") or 0)
+        return t if t > 0 else 0.05
+    except Exception:
+        return 0.05
+
+
 def tick_round(price: float, tick: float = 0.05, down: bool = False) -> float:
     import math
     n = price / tick
@@ -173,16 +184,16 @@ def tick_round(price: float, tick: float = 0.05, down: bool = False) -> float:
 
 
 def place_gtt_oco(k, symbol: str, qty: int, sl_trigger: float, target_trigger: float,
-                  last_price: float, product: str = "CNC") -> str:
+                  last_price: float, product: str = "CNC", tick: float = 0.05) -> str:
     """One GTT with two exits (OCO): when either price is touched, Zerodha places that SELL order
     and cancels the other. Returns the GTT id."""
     exch, name = symbol.split(":")
-    sl_t, tg_t = tick_round(sl_trigger), tick_round(target_trigger)
+    sl_t, tg_t = tick_round(sl_trigger, tick), tick_round(target_trigger, tick)
     leg = dict(exchange=exch, tradingsymbol=name, transaction_type=k.TRANSACTION_TYPE_SELL,
                quantity=qty, order_type=k.ORDER_TYPE_LIMIT, product=product)
     res = k.place_gtt(trigger_type=k.GTT_TYPE_OCO, tradingsymbol=name, exchange=exch,
                       trigger_values=[sl_t, tg_t], last_price=last_price,
-                      orders=[{**leg, "price": tick_round(sl_t * (1 - SL_LIMIT_GAP), down=True)},
+                      orders=[{**leg, "price": tick_round(sl_t * (1 - SL_LIMIT_GAP), tick, down=True)},
                               {**leg, "price": tg_t}])
     return str(res["trigger_id"] if isinstance(res, dict) else res)
 

@@ -900,8 +900,9 @@ def manual_order(b: ManualOrder, mid: int = Depends(current_member_id)):
             if status == "COMPLETE" and avg:
                 sl, tg = avg * (1 - b.sl_pct / 100), avg * (1 + b.target_pct / 100)
                 try:
-                    t.gtt_id = broker.place_gtt_oco(k, full, filled or qty, sl, tg, ltp or avg, "CNC")
-                    t.gtt_status, t.gtt_sl, t.gtt_target = "active", broker.tick_round(sl), broker.tick_round(tg)
+                    tick = float(ins.get("tick") or 0.05)
+                    t.gtt_id = broker.place_gtt_oco(k, full, filled or qty, sl, tg, ltp or avg, "CNC", tick)
+                    t.gtt_status, t.gtt_sl, t.gtt_target = "active", broker.tick_round(sl, tick), broker.tick_round(tg, tick)
                     gtt_msg = f" GTT created in Zerodha: target {t.gtt_target:.2f}, stop loss {t.gtt_sl:.2f}."
                 except Exception as e:
                     t.gtt_status = "error"

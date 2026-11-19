@@ -249,8 +249,9 @@ def ensure_gtts(s: Session, k, sub: Subscription, algo, notes: list):
             ltp = broker.ltp_many(k, [sym]).get(sym) or p.avg
             if not sl < ltp < tg:          # already past a level: MJVS sells at this run instead
                 continue
-            t.gtt_id = broker.place_gtt_oco(k, sym, p.qty, sl, tg, ltp, algo.product)
-            t.gtt_status, t.gtt_sl, t.gtt_target = "active", broker.tick_round(sl), broker.tick_round(tg)
+            tick = broker.instrument_tick(k, sym)
+            t.gtt_id = broker.place_gtt_oco(k, sym, p.qty, sl, tg, ltp, algo.product, tick)
+            t.gtt_status, t.gtt_sl, t.gtt_target = "active", broker.tick_round(sl, tick), broker.tick_round(tg, tick)
             notes.append(f"GTT created for {name}: target {t.gtt_target:.2f}, stop loss {t.gtt_sl:.2f}")
         except broker.TokenError:
             raise
