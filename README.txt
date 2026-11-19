@@ -27,14 +27,14 @@ THE 8 ALGOS
     BUY when all three first become true together: close crosses above the 50 SMA,
     RSI(8) above 60, Bollinger %b(50, SD 1) above 51.
   - Swing: daily candles, scans ALL NSE stocks. Target 8%, stop loss 5%.
-  - Swing: top 5 BUY stocks with the money split equally, FIXED stop loss 5% below the buy price,
+  - Swing: up to 'Stocks to buy per day' NEW BUY stocks each day (held stocks do not count; or No limit), FIXED stop loss 5% below the buy price,
     target 8%, and in LIVE mode a Zerodha GTT for both exits. The drawdown limit only stops the
     whole algo.
     No price limit: a stock costing more than one slot's money is skipped for the next BUY stock.
   - Manual Buy window (Live): tick "Also create a GTT" to add a target % and stop loss % in Zerodha.
     The Trade page -> "Your Zerodha account" -> GTT tab lists all active GTTs.
   - Penny stock: same rule on WEEKLY candles (Monday-Friday; this week included up to the last
-    trading day). Only stocks UNDER Rs 100. Buys the top 5 BUY stocks with the money split equally
+    trading day). Only stocks UNDER Rs 100. Buys up to 'Stocks to buy per day' NEW BUY stocks each day (held stocks do not count), money split equally
     (Rs 1,000 -> Rs 200 each). Target 8%; stop loss = your drawdown limit (default 5%).
     LIVE mode: after each buy fills, MJVS creates a GTT (OCO) in your Zerodha account with both
     exits: target +8% and stop loss -drawdown%. Zerodha sells by itself, even if MJVS is off.

@@ -4,7 +4,8 @@ SWING — READY. Daily candles. (Rule: mjvs/algos/rules.py)
 BUY on the daily candle where all three first become true together:
   1. close crosses above the 50 SMA        2. RSI(8) above 60        3. Bollinger %b(50, SD 1) above 51
 Signals use the last completed trading day (checked from 9:20). Scans ALL NSE stocks, no price limit.
-MONEY: the top 5 BUY stocks (strongest RSI first), money split equally. A stock that costs more than
+MONEY: up to 'Stocks to buy per day' NEW BUY stocks each day (strongest RSI first; held stocks do not count),
+  money split equally. A stock that costs more than
   one slot's money is skipped and the next BUY stock is bought instead, so the slots still fill.
 EXIT: target 8% above the buy price; stop loss ALWAYS 5% below the buy price (fixed).
   The drawdown limit is separate: it stops the whole algo if it falls that % from its peak.

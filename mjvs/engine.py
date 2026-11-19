@@ -521,15 +521,19 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
                 cash += res[0] * res[1]
                 held.pop(sym)
 
-    # 3. Entries into free slots, equal money per slot
+    # 3. New buys. max_positions = how many NEW stocks to buy per day (stocks already held do not
+    #    count; Zerodha has no such limit). 0 = No limit: every BUY stock with a fixed amount each.
     cands = entry_candidates(s, algo, sub, rows, today)
     if algo.can_enter(now) and algo.auto_trade:
-        unlimited = sub.max_positions == 0              # No limit: every BUY stock, a fixed amount each
-        slots = 10 ** 6 if unlimited else sub.max_positions - len(held)
+        unlimited = sub.max_positions == 0
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        bought_today = (s.query(Trade).filter(Trade.member_id == sub.member_id, Trade.algo_id == sub.algo_id,
+                                              Trade.mode == mode_of(sub), Trade.side == "BUY",
+                                              Trade.status.in_(COUNTED), Trade.at >= midnight).count())
+        slots = 10 ** 6 if unlimited else sub.max_positions - bought_today
         if not unlimited and slots <= 0 and cands:
-            notes.append(f"No free slot: {len(held)} of {sub.max_positions} positions are held ("
-                         + ", ".join(s.split(":")[1] for s in held) + "), so no new buy. A slot frees when one is sold")
-        slot_cash = (sub.per_stock or sub.amount) if unlimited else sub.amount / sub.max_positions
+            notes.append(f"Already bought {bought_today} of {sub.max_positions} stocks today; more BUY stocks are taken "
+                         "next trading day (or raise 'Stocks to buy per day')")
         if not sub.paper:
             kite_cash = broker.available_cash(k) if account_ok else None
             if kite_cash is None:
@@ -537,6 +541,9 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
                 notes.append("Zerodha cash could not be read, so no new buy this run")
             else:
                 cash = min(cash, kite_cash)
+        # money per new stock: the fixed amount (No limit), or the FREE money split equally between
+        # today's remaining new stocks (money already in held stocks is not counted twice)
+        slot_cash = (sub.per_stock or sub.amount) if unlimited else max(cash, 0) / max(slots, 1)
         picks, seen = [], set(held) | bought_recently(s, sub, algo.reentry_days, now)
         for sym, note in cands:
             if sym not in seen:

@@ -8,7 +8,8 @@ WEEKS: Monday to Friday. Each weekly candle is built from Kite's daily candles:
   open = first trading day's open, high/low = the week's high/low, close = last trading day's close.
   This week's candle is INCLUDED, built from Monday up to the last completed trading day,
   so a signal can appear mid-week (the candle can still change until Friday's close).
-MONEY: the top 5 BUY stocks (strongest RSI first), money split equally (e.g. Rs 1,000 -> Rs 200 each).
+MONEY: up to 'Stocks to buy per day' NEW BUY stocks each day (strongest RSI first; stocks already held do not
+  count), money split equally (e.g. Rs 1,000 / 5 -> Rs 200 each), or No limit with a fixed amount per stock.
 EXIT: target 8% above the buy price; stop loss = the member's drawdown limit (default 5%) below it.
   The whole algo also stops if it falls that % from its peak. Checked every 15 minutes.
 Each stock is bought once a week. Scans ALL NSE stocks under Rs 100. Small stocks can be illiquid.
@@ -51,7 +52,7 @@ class Penny(Algo):
     sl_from_drawdown = True               # stop loss % = drawdown slider (default 5%)
     default_drawdown = 5
     max_price = 100                       # only stocks under Rs 100
-    max_positions = 5                     # top 5 BUY stocks, money split equally
+    max_positions = 5                     # new stocks to buy per day (held stocks do not count)
     manual_scan = True                    # scans only when "Scan now" is pressed; then trades at once
     use_gtt = True                        # Live: target + stop loss also placed as a Zerodha GTT (OCO)
     exits_note = ("Target 8% above the buy price. Stop loss = your drawdown limit (default 5%) below the buy price. "
