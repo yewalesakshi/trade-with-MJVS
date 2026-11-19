@@ -788,7 +788,11 @@ function allPositions() {
   return out;
 }
 function appPositions() {
-  appLayout("positions", "Positions", '<div class="card"><div class="card-head"><div><h3>Open positions</h3><p class="muted small">From each algo’s own trades. Prices update while Kite is connected.</p></div></div><div id="ps"></div></div>');
+  appLayout("positions", "Positions", '<div class="card"><div class="card-head"><div><h3>Open positions</h3><p class="muted small">From each algo’s own trades, checked against your Zerodha account every 15 minutes in market hours. Prices update while Kite is connected.</p></div><button class="btn sm ghost" type="button" id="psync">Sync with Zerodha</button></div><p id="psmsg" class="msg small" role="status"></p><div id="ps"></div></div>');
+  on("psync", "click", function () {
+    var b = this, m = $("psmsg"); b.disabled = true; say(m, true, "Checking your Zerodha account…");
+    api("/positions/sync", { method: "POST" }).then(function (x) { b.disabled = false; say(m, x.ok, x.ok ? x.d.message : errText(x, "Could not check")); refresh(); }).catch(function () { b.disabled = false; say(m, false, "Could not reach the server"); });
+  });
   PAGE.paint = function () { $("ps").innerHTML = table(["Algo", "Symbol", "Qty", "Avg", "LTP", "P&amp;L", "Since", "Zerodha GTT"], posRows(allPositions(), true, true), "No open positions."); };
 }
 function appTrades() {

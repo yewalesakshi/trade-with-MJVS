@@ -307,6 +307,53 @@ def sync_gtts(s: Session, k, sub: Subscription, notes: list):
     s.commit()
 
 
+def sync_with_account(s: Session, sub: Subscription) -> str:
+    """Brings one LIVE algo's records in line with the real Zerodha account (GTT results, sales made
+    anywhere, pending orders). Never buys or sells. Works whether the algo is running or stopped."""
+    algo = ALGOS.get(sub.algo_id)
+    m = s.get(Member, sub.member_id)
+    if sub.paper or not algo:
+        return ""
+    if not token_fresh(m):
+        return "Connect Kite first"
+    k = broker.client(m.kite_token)
+    notes: list = []
+    reconcile_pending(s, k, sub)
+    if not hasattr(algo, "custom_run"):
+        if algo.use_gtt:
+            sync_gtts(s, k, sub, notes)
+        reconcile_account(s, k, sub, algo, notes)
+    s.commit()
+    return "; ".join(notes) or "matches your Zerodha account"
+
+
+_last_sync: dict = {}
+
+
+def sync_stopped_live(s: Session, now: dt.datetime):
+    """Every 15 minutes in market hours, STOPPED live algos that still hold stocks are checked against
+    the Zerodha account too, so a GTT sale or a sale in the Kite app frees their records."""
+    if now.weekday() >= 5 or not dt.time(9, 15) <= now.time() <= dt.time(15, 45):
+        return
+    for sub in s.query(Subscription).filter(Subscription.paper.is_(False), Subscription.running.is_(False)).all():
+        last = _last_sync.get(sub.id)
+        if last and now - last < dt.timedelta(minutes=15):
+            continue
+        _, held = positions(s, sub)
+        if not held:
+            continue
+        _last_sync[sub.id] = now
+        try:
+            msg = sync_with_account(s, sub)
+            if msg and msg != "matches your Zerodha account":
+                sub.last_message = f"Stopped; checked against your Zerodha account: {msg}"
+                s.commit()
+        except broker.TokenError:
+            pass
+        except Exception as e:
+            print(f"sync of stopped algo {sub.id} failed: {e!r}")
+
+
 def reconcile_account(s: Session, k, sub: Subscription, algo, notes: list) -> bool:
     """LIVE: the Zerodha account is the truth. A position this algo has on record but the account no
     longer holds (sold by a GTT, in the Kite app or anywhere else) is recorded as sold, using the
@@ -649,6 +696,7 @@ def tick(now: dt.datetime | None = None):
                     continue
                 guarded(s, sub, lambda sub=sub: run_sub(s, algo, sub, rows, now))
         daily_scans(s, now)
+        sync_stopped_live(s, now)
 
 
 _closed_days: set = set()

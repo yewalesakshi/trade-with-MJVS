@@ -392,6 +392,26 @@ def kite_funds(mid: int = Depends(current_member_id)):
         return {"cash": kite_cash(s, s.get(Member, mid))}
 
 
+@app.post("/positions/sync")
+def positions_sync(mid: int = Depends(current_member_id)):
+    """'Sync with Zerodha' button: every live algo of this member is checked against the real account."""
+    out = []
+    with Session(engine) as s:
+        m = s.get(Member, mid)
+        if not eng.token_fresh(m):
+            raise HTTPException(400, "Connect Kite first")
+        for sub in s.query(Subscription).filter_by(member_id=mid, paper=False).all():
+            try:
+                msg = eng.sync_with_account(s, sub)
+            except broker.TokenError:
+                raise HTTPException(400, "Your Kite login has expired. Connect Kite again.")
+            except Exception as e:
+                msg = f"could not check ({str(e)[:80]})"
+            if msg:
+                out.append(f"{getattr(ALGOS.get(sub.algo_id), 'name', sub.algo_id)}: {msg}")
+    return {"message": " | ".join(out) or "No live algo to check."}
+
+
 @app.post("/algos/{algo_id}/stop")
 def algo_stop(algo_id: str, mid: int = Depends(current_member_id)):
     with Session(engine) as s:
