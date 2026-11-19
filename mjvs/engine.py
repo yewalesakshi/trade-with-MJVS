@@ -415,6 +415,9 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
     cands = entry_candidates(s, algo, sub, rows, today)
     if algo.can_enter(now) and algo.auto_trade:
         slots = sub.max_positions - len(held)
+        if slots <= 0 and cands:
+            notes.append(f"No free slot: {len(held)} of {sub.max_positions} positions are held ("
+                         + ", ".join(s.split(":")[1] for s in held) + "), so no new buy. A slot frees when one is sold")
         slot_cash = sub.amount / sub.max_positions
         picks, seen = [], set(held) | bought_recently(s, sub, algo.reentry_days, now)
         for sym, note in cands:
@@ -457,6 +460,10 @@ def run_sub(s: Session, algo, sub: Subscription, rows: list[dict] | None, now: d
     if algo.source == "scan":
         c = {sig: sum(1 for r in rows or [] if r["signal"] == sig) for sig in ("BUY", "SELL", "ERROR")}
         head += f": scanned {len(rows or [])} ({c['BUY']} BUY, {c['SELL']} SELL" + (f", {c['ERROR']} errors" if c["ERROR"] else "") + ")"
+        if c["ERROR"]:
+            from collections import Counter
+            top = Counter((r.get("error") or "unknown")[:60] for r in rows or [] if r["signal"] == "ERROR").most_common(2)
+            head += " [errors: " + "; ".join(f"{n} × {e}" for e, n in top) + "]"
         if algo.require_tradingview:
             head += f", {len(cands)} new scanner + TradingView match(es)"
     elif algo.require_tradingview:

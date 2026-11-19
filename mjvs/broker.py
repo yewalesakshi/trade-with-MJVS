@@ -190,7 +190,17 @@ def place_gtt_oco(k, symbol: str, qty: int, sl_trigger: float, target_trigger: f
 def gtt_info(k, gtt_id: str) -> dict:
     """Kite's GTT record: status (active, triggered, cancelled, deleted, expired, disabled, rejected)
     and, once triggered, the order Zerodha placed (orders[i]['result']['order_result']['order_id'])."""
-    return k.get_gtt(int(gtt_id))
+    try:
+        return k.get_gtt(int(gtt_id))
+    except TokenError:
+        raise
+    except Exception:
+        # Kite sometimes answers the single-GTT call with "Error during internal conversion";
+        # the list of all GTTs still works, so find it there.
+        for g in k.get_gtts() or []:
+            if str(g.get("id")) == str(gtt_id):
+                return g
+        raise
 
 
 def delete_gtt(k, gtt_id: str):
